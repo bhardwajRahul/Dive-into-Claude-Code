@@ -4,6 +4,8 @@
 
 > The core agent loop is a simple while-loop. Most of the code lives in the systems around it.
 
+This chapter describes **Claude Code v2.1.88**, the source snapshot analyzed in our paper. For later developments and broader design choices, see the [builder's guide](./build-your-own-agent.md) and [source notes](./agent-design-space-source-notes.md).
+
 ## Four Design Questions Every Coding Agent Must Answer
 
 | Design Question | Claude Code's Answer | Alternatives |
@@ -11,7 +13,7 @@
 | **Where does reasoning live?** | Model reasons; harness enforces. ~1.6% AI decision logic, 98.4% infrastructure. | LangGraph: explicit state graphs. Devin: multi-step planners. |
 | **How many execution engines?** | One `queryLoop` for all interfaces (CLI, SDK, IDE). | Mode-specific engines per surface. |
 | **What is the default safety posture?** | Deny-first: deny > ask > allow. Strictest rule wins. | Container isolation (SWE-Agent), git rollback (Aider). |
-| **What is the binding resource constraint?** | ~200K-token context window. 5 compaction strategies run before every model call. | Compute budget, explicit scratchpad. |
+| **What is the binding resource constraint?** | A finite context window. Five pre-model stages apply according to configuration and context pressure. | Compute budget, explicit scratchpad. |
 
 ## High-Level System Structure (7 Components)
 
@@ -39,17 +41,21 @@ All interfaces converge on the same `queryLoop` -- the interactive CLI, headless
 | **State** | Runtime state & persistence | JSONL transcripts, CLAUDE.md hierarchy, auto-memory, sidechain files |
 | **Backend** | Execution environments | Shell execution, MCP connections (7 transport types), 42 tool subdirectories |
 
-## Seven Independent Safety Layers
+<a id="seven-independent-safety-layers"></a>
 
-A request must pass through **all** applicable layers -- any single layer can block it:
+## Seven Safety Layers
+
+The paper groups protection mechanisms into seven layers. The checks that apply depend on the tool, mode, and configuration; separate layers can still share failure modes.
 
 1. **Tool pre-filtering** -- Blanket-denied tools removed from model's view entirely
 2. **Deny-first rule evaluation** -- Deny always overrides allow, even when allow is more specific
 3. **Permission mode constraints** -- Active mode determines baseline handling
 4. **Auto-mode ML classifier** -- Separate LLM call evaluating safety independently
 5. **Shell sandboxing** -- Filesystem + network isolation for shell commands
-6. **Non-restoration on resume** -- Permissions never persist across session boundaries
+6. **Session-scoped permission state** -- The [session app allowlist](https://github.com/chauncygu/collection-claude-code-source-code/blob/53faa8b2162fc7a4dce2e79b55b7101bb8f9e2bf/claude-code-source-code/src/state/AppStateStore.ts#L260) is not restored on resume; the [session bypass flag](https://github.com/chauncygu/collection-claude-code-source-code/blob/53faa8b2162fc7a4dce2e79b55b7101bb8f9e2bf/claude-code-source-code/src/bootstrap/state.ts#L132) is not persisted.
 7. **Hook-based interception** -- PreToolUse hooks can modify or block actions
+
+In the [legacy Bash parsing path](https://github.com/chauncygu/collection-claude-code-source-code/blob/53faa8b2162fc7a4dce2e79b55b7101bb8f9e2bf/claude-code-source-code/src/tools/BashTool/bashPermissions.ts#L2162), commands that split into more than 50 subcommands return an `ask` decision, keeping per-subcommand analysis from overwhelming the event loop.
 
 ## Turn Execution: 9-Step Pipeline
 
@@ -59,19 +65,19 @@ A request must pass through **all** applicable layers -- any single layer can bl
 
 Each turn follows a **9-step pipeline**:
 
-1. Settings resolution → 2. State initialization → 3. Context assembly → 4. Five pre-model shapers → 5. Model call → 6. Tool dispatch → 7. Permission gate → 8. Tool execution → 9. Stop condition check
+1. Settings resolution → 2. State initialization → 3. Context assembly → 4. Applicable pre-model context stages → 5. Model call → 6. Tool dispatch → 7. Permission gate → 8. Tool execution → 9. Stop condition check
 
 ### Five Pre-Model Context Shapers
 
-Executed **sequentially before every model call**, cheapest first:
+The [query loop](https://github.com/chauncygu/collection-claude-code-source-code/blob/53faa8b2162fc7a4dce2e79b55b7101bb8f9e2bf/claude-code-source-code/src/query.ts#L369) considers these stages in order before a model call. Each changes the context only when its conditions are met:
 
 | Stage | Strategy | Trigger |
 |:------|:---------|:--------|
-| Budget Reduction | Per-message size caps | Always active |
+| Budget Reduction | Per-message tool-result size caps | Budget state enabled and limits exceeded |
 | Snip | Trim older history | Feature-gated (`HISTORY_SNIP`) |
-| Microcompact | Cache-aware fine-grained compression | Always (time-based), optional cache-aware path |
+| Microcompact | Clear older tool results | Time threshold on eligible main-thread requests, or an optional cache-editing path |
 | Context Collapse | Read-time virtual projection (non-destructive) | Feature-gated (`CONTEXT_COLLAPSE`) |
-| Auto-Compact | Full model-generated summary (last resort) | When all else fails |
+| Auto-Compact | Model-generated summary | Enabled and above threshold, subject to mode and failure guards |
 
 ### Recovery Mechanisms
 
@@ -112,14 +118,18 @@ Executed **sequentially before every model call**, cheapest first:
   <img src="../assets/extensibility.png" width="85%" alt="Three injection points in the agent loop">
 </p>
 
-### Four Extension Mechanisms (Graduated Context Cost)
+<a id="four-extension-mechanisms-graduated-context-cost"></a>
 
-| Mechanism | Context Cost | Key Capability |
+### Four Extension Mechanisms
+
+Context cost depends on the text the model receives and when it is loaded. Hooks can inject context, and model-based hooks can also incur separate inference cost.
+
+| Mechanism | What Can Enter the Model's Context | Key Capability |
 |:----------|:-------------|:---------------|
-| **Hooks** | Zero | 27 events, 4 execution types (shell, LLM, webhook, subagent verifier) |
-| **Skills** | Low | SKILL.md with 15+ YAML frontmatter fields, injected via SkillTool meta-tool |
-| **Plugins** | Medium | 10 component types (commands, agents, skills, hooks, MCP, LSP, styles...) |
-| **MCP Servers** | High | External tools via 7 transport types (stdio, SSE, HTTP, WebSocket, SDK, IDE) |
+| **Hooks** | Optional context returned by a hook | 27 events, 4 execution types (shell, LLM, webhook, subagent verifier) |
+| **Skills** | Descriptions and relevant skill instructions | SKILL.md with 15+ YAML frontmatter fields, injected via SkillTool meta-tool |
+| **Plugins** | Context from the components they enable | 10 component types (commands, agents, skills, hooks, MCP, LSP, styles...) |
+| **MCP Servers** | Tool schemas and results, depending on discovery and loading | External tools via 7 transport types (stdio, SSE, HTTP, WebSocket, SDK, IDE) |
 
 ### Tool Pool Assembly (5-step pipeline)
 
@@ -150,7 +160,7 @@ System prompt → Environment info → CLAUDE.md hierarchy → Path-scoped rules
 | Project | `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md` | Per-project |
 | Local | `CLAUDE.local.md` | Personal (gitignored) |
 
-**Critical design choice:** CLAUDE.md is **user context** (probabilistic compliance), NOT system prompt (deterministic). Permission rules provide the deterministic enforcement layer.
+**Instructions and enforcement are separate.** CLAUDE.md is [injected as user context](https://github.com/chauncygu/collection-claude-code-source-code/blob/53faa8b2162fc7a4dce2e79b55b7101bb8f9e2bf/claude-code-source-code/src/utils/api.ts#L449). Both this context and the system prompt guide the model; instruction priority does not make compliance deterministic. Permission checks and sandbox restrictions constrain actions at execution time.
 
 ### File-Based Memory
 
@@ -172,8 +182,10 @@ Custom: `.claude/agents/*.md` with YAML frontmatter supporting tools, model, per
 
 ### Key Design: SkillTool vs AgentTool
 
-- **SkillTool**: Injects instructions into current context (cheap, same window)
-- **AgentTool**: Spawns new isolated context window (expensive, ~7x tokens, but context-safe)
+- **SkillTool**: Injects instructions into the current conversation.
+- **AgentTool**: Runs a subtask in a separate conversation, with model and coordination costs that depend on the task.
+
+Conversation separation limits how much intermediate work enters the parent context. Filesystem access and permissions depend on the execution backend and configuration.
 
 ### Three Isolation Modes
 
@@ -185,7 +197,7 @@ Custom: `.claude/agents/*.md` with YAML frontmatter supporting tools, model, per
 
 ### Sidechain Transcripts
 
-Each subagent writes its own `.jsonl` file. Only summary returns to parent. Full history never enters parent context. Multi-instance coordination via POSIX `flock()` -- zero external dependencies.
+Subagent transcripts use separate `.jsonl` files. The parent receives result content through AgentTool; transcript storage and the returned result serve different purposes. Multi-instance coordination via POSIX `flock()` -- zero external dependencies.
 
 ## Session Persistence
 
@@ -201,9 +213,11 @@ Each subagent writes its own `.jsonl` file. Only summary returns to parent. Full
 | Global prompt history | `history.jsonl` | Cross-session prompt recall (reverse-read for Up-arrow) |
 | Subagent sidechains | Separate JSONL per subagent | Isolated subagent histories |
 
-### Safety: Permissions Never Restored on Resume
+<a id="safety-permissions-never-restored-on-resume"></a>
 
-Trust is always re-established in the current session. This accepts user friction as the cost of maintaining the safety invariant.
+### Session-scoped Grants on Resume
+
+In the v2.1.88 snapshot, the session app allowlist is not restored on resume, and the session bypass flag is not persisted. These specific rules concern temporary session state; they do not establish a general rule for restoring persistent policies or operating modes.
 
 ### Design Trade-off
 

@@ -1,11 +1,13 @@
 # 深入理解 Claude Code
 
+*当下与未来 AI 智能体系统的设计空间*
+
 <p align="center">
   <img src="./assets/main_structure.png" width="85%" alt="Claude Code 高层系统结构">
 </p>
 
 <p align="center">
-  <a href="./paper/Dive_into_Claude_Code.pdf"><img src="https://img.shields.io/badge/Paper-PDF-blue.svg?logo=adobeacrobatreader&logoColor=white" alt="论文"></a>
+  <a href="https://arxiv.org/pdf/2604.14228v2"><img src="https://img.shields.io/badge/Paper-PDF-blue.svg?logo=adobeacrobatreader&logoColor=white" alt="论文"></a>
   <a href="https://arxiv.org/abs/2604.14228"><img src="https://img.shields.io/badge/arXiv-2604.14228-b31b1b.svg" alt="arXiv"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-CC--BY--NC--SA--4.0-lightgrey.svg" alt="许可证"></a>
   <a href="https://github.com/VILA-Lab/Dive-into-Claude-Code/stargazers"><img src="https://img.shields.io/github/stars/VILA-Lab/Dive-into-Claude-Code?style=social" alt="星标数"></a>
@@ -55,7 +57,7 @@
 
 - **98.4% 基础设施，1.6% AI** —— 智能体循环不过是一个 while 循环；真正的工程复杂度集中在权限门控、上下文管理和恢复逻辑上。
 - **5 个价值观 → 13 条原则 → 实现** —— 每一条设计决策都能追溯回人类决策权威、安全、可靠性、能力和适应性。
-- **深度防御却存在共享故障模式** —— 7 层安全防护，但都共享性能约束；子命令一多（超过 50 个），整段安全分析就会被跳过。
+- **分析有上限，超限转为询问批准** —— 旧版 shell 解析路径拆出超过 50 个子命令时，会返回 `ask` 决策。
 - **2 个 CVE 暴露了预信任窗口** —— 扩展会在信任对话框出现**之前**就已执行。
 - **横跨各层的 harness 难以被重新实现** —— 循环本身容易复制，但钩子、分类器、压缩和隔离机制则不然。
 
@@ -72,6 +74,8 @@
 
 `1,884 个文件` · `约 512K 行` · `v2.1.88` · `7 个安全层` · `5 个压缩阶段` · `54 个工具` · `27 个钩子事件` · `4 个扩展机制` · `7 个权限模式`
 
+架构部分分析的是 **Claude Code v2.1.88**；设计指南和资源目录在此基础上补充了截至 **2026 年 9 月 7 日**核查的工作。顶部 PDF 链接指向 [2026 年 7 月 2 日的 arXiv v2](https://arxiv.org/abs/2604.14228v2)，[仓库中的 2026 年 4 月 PDF](./paper/Dive_into_Claude_Code.pdf)保留为历史版本。
+
 ---
 
 <details open>
@@ -84,7 +88,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 | 推理放在哪里？ | 模型负责推理，harness 负责强制执行规则。约 1.6% 是 AI，98.4% 是基础设施。 |
 | 有多少个执行引擎？ | 一个 `queryLoop` 供所有入口（CLI、SDK、IDE）共用。 |
 | 默认的安全姿态是什么？ | 拒绝优先：拒绝 > 询问 > 允许；最严格的规则优先。 |
-| 最根本的资源约束是什么？ | 约 200K（旧模型）/ 1M（Claude 4.6 系列）的上下文窗口。每次模型调用前都要过 5 层压缩。 |
+| 最根本的资源约束是什么？ | 约 200K（旧模型）/ 1M（Claude 4.6 系列）的上下文窗口。各个上下文管理阶段按各自条件触发。 |
 
 整个系统可以拆成**7 个组件**（用户 → 入口 → 智能体循环 → 权限系统 → 工具 → 状态与持久化 → 执行环境），分布在**5 个架构层**上。
 
@@ -109,7 +113,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 | 价值观 | 核心思想 |
 |:------|:----------|
 | **人类决策权威** | 人类通过主体层级保持控制。当 93% 的提示批准率暴露出批准疲劳后，Anthropic 的应对是重新划分边界，而不是追加更多警告。 |
-| **安全、安保、隐私** | 即使在人类警惕性下降时，系统也能守住安全底线。7 个独立安全层。 |
+| **安全、安保、隐私** | 即使在人类警惕性下降时，系统也能守住安全底线。7 种安全机制。 |
 | **可靠执行** | 按用户的本意去执行；收集—行动—验证的闭环；优雅恢复。 |
 | **能力放大** | "一个 Unix 工具，而不是产品。"98.4% 是让模型跑得起来的确定性基础设施。 |
 | **上下文适应性** | CLAUDE.md 层级、渐进式的可扩展性，以及随时间演变的信任轨迹。 |
@@ -152,9 +156,9 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 核心是一个 **ReAct 模式的 while 循环**：组装上下文 → 调用模型 → 分派工具 → 检查权限 → 执行 → 重复。整个循环实现为一个 `AsyncGenerator`，以流式事件的形式逐步输出。
 
-**每次模型调用前**，五个压缩整形阶段按顺序执行（开销最低者优先）：预算削减 → 裁剪 → 微压缩 → 上下文折叠 → 自动压缩。
+**模型调用前**，上下文管理按顺序检查五个阶段：预算缩减 → Snip → Microcompact → Context Collapse → Auto-Compact。各阶段是否实际调整上下文，取决于功能开关、配置和触发阈值。
 
-**每轮 9 步管道：** 设置解析 → 状态初始化 → 上下文组装 → 5 个预模型整形阶段 → 模型调用 → 工具分派 → 权限门控 → 工具执行 → 停止条件
+**每轮 9 步管道：** 设置解析 → 状态初始化 → 上下文组装 → 按条件执行的上下文管理 → 模型调用 → 工具分派 → 权限门控 → 工具执行 → 停止条件
 
 **两条执行路径：**
 - `StreamingToolExecutor` —— 工具流入时即开始执行（延迟优化）
@@ -179,10 +183,10 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 **7 个权限模式**构成渐进式信任光谱：`plan` → `default` → `acceptEdits` → `auto`（ML 分类器）→ `dontAsk` → `bypassPermissions`（+ 内部 `bubble`）。
 
-**拒绝优先**：宽范围的拒绝规则*始终*压过窄范围的允许规则。**7 个独立安全层**，从工具预过滤，到 shell 沙箱，再到钩子拦截。**恢复会话时权限永不自动恢复**——每次会话都要重新建立信任。
+**拒绝优先**：规则评估中，宽范围的拒绝规则优先于窄范围的允许规则。**7 个安全层**覆盖工具过滤、权限决策、钩子和沙箱。在 v2.1.88 中，会话绕过标志和计算机操作的应用白名单不会随会话恢复；这些临时状态与持久化的权限配置需要分别看待。
 
 > [!WARNING]
-> **共享故障模式：** 当各层共享同一种约束时，深度防御就会退化。逐个解析子命令会长时间占住事件循环——一旦子命令超过 50 个，Claude Code 就会为了避免 REPL 卡死而跳过整段安全分析。
+> **分析的计算上限：** 为避免阻塞事件循环，旧版解析路径限制了逐个分析的子命令数量。该路径拆出超过 50 个子命令时会返回 `ask`，转入批准决策，而不会直接放行命令。
 
 <details>
 <summary><b>更多详情：授权管道、auto 模式分类器、CVE</b></summary>
@@ -208,7 +212,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
   <img src="./assets/extensibility.png" width="85%" alt="三个注入点：组装、模型、执行">
 </p>
 
-**四种扩展机制，上下文开销由低到高：** 钩子（零成本）→ Skills（低成本）→ 插件（中成本）→ MCP（高成本）。智能体循环中的三个注入点：**assemble()**（模型看到的内容）、**model()**（它能触及的内容）、**execute()**（操作是否/如何运行）。
+**四种扩展机制：** Hooks、Skills、Plugins 和 MCP。上下文成本取决于实际展示给模型的指令、工具定义和返回内容。它们作用于循环中的三个位置：**assemble()**（模型看到什么）、**model()**（模型能调用哪些工具）、**execute()**（动作是否执行、如何执行）。
 
 **工具池组装**（5 步）：基础枚举（最多 54 个工具）→ 模式过滤 → 拒绝预过滤 → MCP 集成 → 去重
 
@@ -231,11 +235,11 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
   <img src="./assets/context.png" width="95%" alt="上下文构建">
 </p>
 
-上下文窗口由 **9 个来源**按固定顺序拼装而成。CLAUDE.md 指令是作为**用户上下文**传进去的（模型不一定照做），而不是写进系统提示（那样才一定生效）。记忆是**基于文件的**（不使用向量数据库）——完全可查看、可编辑、可纳入版本控制。
+**9 个有序来源**共同构成上下文窗口。CLAUDE.md 指令以**用户上下文**的形式进入。提示词指导模型行为，权限检查和沙箱则在模型之外约束访问。在这个版本中，记忆以文件保存，内容可以查看、编辑和纳入版本管理。
 
 **4 级 CLAUDE.md 层级：** 托管（`/etc/`）→ 用户（`~/.claude/`）→ 项目（`CLAUDE.md`、`.claude/rules/`）→ 本地（`CLAUDE.local.md`，被 gitignore 忽略）
 
-**5 层压缩**（渐进式惰性降级）：预算削减 → 裁剪 → 微压缩 → 上下文折叠（读取时投影，非破坏性）→ 自动压缩（调模型把全部历史重写成摘要，最后手段）
+**五个上下文管理阶段**各有触发条件：预算缩减 → Snip → Microcompact → Context Collapse（读取时投影，不破坏原记录）→ Auto-Compact（由模型生成摘要）。
 
 **记忆检索：** 由 LLM 扫描各记忆文件的文件头，最多挑出 5 个相关文件。不使用嵌入向量，也不使用向量相似度。
 
@@ -252,9 +256,9 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
   <img src="./assets/subagent.png" width="90%" alt="子智能体架构">
 </p>
 
-**6 个内置类型**（Explore、Plan、General-purpose、Guide、Verification、Statusline）+ 通过 `.claude/agents/*.md` 定义的自定义智能体。**侧链转录稿**：只把摘要回传给父级（子智能体那些冗长的中间输出不会进入父级上下文）。三种隔离模式：worktree、remote、in-process。多实例间通过 POSIX `flock()` 协调。
+**6 种内置类型**（Explore、Plan、General-purpose、Guide、Verification、Statusline），另可通过 `.claude/agents/*.md` 定义自定义智能体。侧链转录稿单独保存执行者的历史，简短的返回结果可以控制进入父上下文的信息量。worktree、remote 和 in-process 提供不同的执行方式；上下文分开保存，本身并不能决定文件访问范围或授权。协调使用 POSIX `flock()`。
 
-**SkillTool vs AgentTool：** SkillTool 把内容注入到当前上下文（开销低）。AgentTool 另开一个隔离的上下文（开销高，但能防止上下文爆炸）。
+**SkillTool vs AgentTool：** SkillTool 向当前上下文加入指导，AgentTool 把工作委派到另一个上下文。Token 成本取决于实际执行的工作和返回的结果。
 
 **权限覆盖：** 子智能体 `permissionMode` 生效，除非父级处于 `bypassPermissions`/`acceptEdits`/`auto`（显式用户决策始终优先）。
 
@@ -273,7 +277,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
   <img src="./assets/session_compact.png" width="75%" alt="会话持久化与上下文压缩">
 </p>
 
-三个通道：仅追加（append-only）的 JSONL 转录稿、全局提示历史、子智能体侧链。**恢复会话时权限永不自动恢复**——每次会话都要重新建立信任。设计上**优先可审计性，而非查询能力**。
+会话历史保存在三个通道中：仅追加的 JSONL 转录稿、全局提示历史和子智能体侧链。在 v2.1.88 中，会话绕过标志和计算机操作的应用白名单不会从旧会话恢复。持久策略、会话模式和临时授权各有自己的有效期。
 
 **链式修补：** 压缩边界记录 `headUuid`/`anchorUuid`/`tailUuid`。会话加载器在读取时修补消息链；磁盘上的数据不会被就地改写。
 
@@ -288,18 +292,26 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 <details>
 <summary><h2>Agent 设计空间的新信号</h2></summary>
 
-这些 agent 系统的新进展进一步强化了 Claude Code 揭示的同一个判断：agent 能力不只是模型属性，而是由模型周围的运行时、context 层、执行边界、工具供应链，以及人类手中的控制手段和外围的评估闭环共同决定的。
+Claude Code 提供了一个具体起点：模型选择动作，周围的系统负责工具、上下文、权限和恢复。近期的工作进一步把这些选择放到整个任务中考察：工作如何组织，中断后保留什么，哪些经验值得复用，以及凭什么证据继续推进。
 
 | 设计启示 | 对 Agent 构建者意味着什么 | 代表信号 |
 |:---|:---|:---|
-| **运行时与控制面是一等设计关注点** | 持久执行、检查点、沙箱、agent inventory、策略面和可观测性应该作为用户可感知的系统界面来设计，而不是隐藏在部署管线里。 | [Cursor cloud agents](https://cursor.com/blog/cloud-agent-lessons)、[Google Managed Agents](https://blog.google/innovation-and-ai/technology/developers-tools/managed-agents-gemini-api/)、[Microsoft Agent 365](https://www.microsoft.com/en-us/security/blog/2026/05/01/microsoft-agent-365-now-generally-available-expands-capabilities-and-integrations/)、[Databricks Omnigent](https://www.databricks.com/blog/introducing-omnigent-meta-harness-combine-control-and-share-your-agents) |
-| **Context 是有生命周期的基础设施** | Prompt、文件、skills、IDE 索引、workspace state、memory namespace 和 interpreter state 都需要生命周期、来源、审查和回滚。 | [LangChain Context Hub](https://www.langchain.com/blog/introducing-context-hub)、[AWS AgentCore](https://aws.amazon.com/blogs/machine-learning/break-the-context-window-barrier-with-amazon-bedrock-agentcore/)、[Anthropic managed-agent memory](https://platform.claude.com/docs/en/managed-agents/memory) |
-| **执行边界就是安全边界** | 权限、网络可达性、文件系统访问、凭证托管、租户隔离和 OS sandboxing 是核心架构，而不是后期加固项。 | [Codex Windows sandbox](https://openai.com/index/building-codex-windows-sandbox/)、[Running Codex safely](https://openai.com/index/running-codex-safely/)、[Anthropic self-hosted sandboxes](https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes) |
-| **工具与 skills 构成供应链** | MCP servers、skills、plugins 和 agent-to-agent protocols 需要 registry、allowlist、identity、语义审查、版本管理和撤销机制。 | [NSA MCP security](https://www.nsa.gov/Portals/75/documents/Cybersecurity/CSI_MCP_SECURITY.pdf)、[GitHub MCP allowlists](https://github.blog/changelog/2026-04-16-copilot-cli-supports-custom-registry-based-mcp-allowlists/)、[A2A milestone](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year) |
-| **人类角色转向管理者与验证者** | Agent 产品应该支持目标、计划、审批、中断、可审查 diff、上报人工的路径，以及受约束的多 agent 写权限。 | [Codex from anywhere](https://openai.com/index/work-with-codex-from-anywhere/)、[Copilot cloud agent](https://github.blog/changelog/2026-04-01-research-plan-and-code-with-copilot-cloud-agent)、[Cognition multi-agents](https://cognition.ai/blog/multi-agents-working) |
-| **可观测性必须进入改进闭环** | Traces 不应止步于被动日志，而应进入 eval、failure clustering、policy enforcement 和 prompt/tool repair。 | [LangSmith Engine](https://www.langchain.com/blog/how-we-built-langsmith-engine-our-agent-for-improving-agents)、[OpenAI agent improvement loop](https://developers.openai.com/cookbook/examples/agents_sdk/agent_improvement_loop)、[AWS AgentCore Evaluations](https://aws.amazon.com/blogs/machine-learning/build-reliable-ai-agents-with-amazon-bedrock-agentcore-evaluations/) |
+| **Graph Engineering 让关系变得明确** | 分别表达任务依赖、智能体职责和运行状态；在节点内部，智能体仍可自主选择动作。 | [Graph Engineering 综述](https://arxiv.org/abs/2608.21156)、[Agent Graph](https://github.com/context4ai/agent-graph/tree/387f80db65bf20a61bc666b4fa885200fcedad08) |
+| **长程任务需要明确的运行状态** | 分别记录目标、会话、执行机器、检查点和结果交付状态；恢复时要明确由谁接续尚未完成的动作。 | [Cursor cloud agents](https://cursor.com/blog/cloud-agent-lessons)、[Google Managed Agents](https://blog.google/innovation-and-ai/technology/developers-tools/managed-agents-gemini-api/)、[Microsoft Agent 365](https://www.microsoft.com/en-us/security/blog/2026/05/01/microsoft-agent-365-now-generally-available-expands-capabilities-and-integrations/)、[Databricks Omnigent](https://www.databricks.com/blog/introducing-omnigent-meta-harness-combine-control-and-share-your-agents) |
+| **上下文与记忆需要生命周期规则** | 当前工作上下文与可复用记忆有不同的生命周期；记下经验的来源、适用范围、更新规则和检索成本。 | [LangChain Context Hub](https://www.langchain.com/blog/introducing-context-hub)、[AWS AgentCore](https://aws.amazon.com/blogs/machine-learning/break-the-context-window-barrier-with-amazon-bedrock-agentcore/)、[Anthropic managed-agent memory](https://platform.claude.com/docs/en/managed-agents/memory) |
+| **访问限制需要执行边界** | 权限、网络可达性、文件系统访问、凭证保管、租户隔离和沙箱，都需要在架构设计时考虑。 | [Codex Windows sandbox](https://openai.com/index/building-codex-windows-sandbox/)、[Running Codex safely](https://openai.com/index/running-codex-safely/)、[Anthropic self-hosted sandboxes](https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes) |
+| **工具与技能构成供应链** | 管理工具、技能和插件的来源与版本，分别约定安装策略、更新策略、服务器身份和动作批准。 | [NSA MCP security](https://www.nsa.gov/Portals/75/documents/Cybersecurity/CSI_MCP_SECURITY.pdf)、[GitHub MCP allowlists](https://github.blog/changelog/2026-04-16-copilot-cli-supports-custom-registry-based-mcp-allowlists/)、[A2A milestone](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year) |
+| **人类需要控制整个运行过程** | 支持目标、计划、审批、中断、可审查的修改和人工介入；多个智能体都能写入时，还要明确各自负责什么。 | [Codex from anywhere](https://openai.com/index/work-with-codex-from-anywhere/)、[Copilot cloud agent](https://github.blog/changelog/2026-04-01-research-plan-and-code-with-copilot-cloud-agent)、[Cognition multi-agents](https://cognition.ai/blog/multi-agents-working) |
+| **推进与停止也需要评估** | 除了执行单步任务的能力，还要评估何时继续、验证、求助或停止。 | [LoopArena](https://arxiv.org/abs/2608.28281) |
+| **可观测性需要接入改进流程** | 从执行轨迹中提出可检验的失败假设，再用相关任务检验修改、用回归测试保护已有成功，并在新样本上确认收益。 | [LangSmith Engine](https://www.langchain.com/blog/how-we-built-langsmith-engine-our-agent-for-improving-agents)、[OpenAI agent improvement loop](https://developers.openai.com/cookbook/examples/agents_sdk/agent_improvement_loop)、[AWS AgentCore Evaluations](https://aws.amazon.com/blogs/machine-learning/build-reliable-ai-agents-with-amazon-bedrock-agentcore-evaluations/) |
 
-这些信号不是在替代 Claude Code 的 design space，而是在让它的边界更清晰：agent loop 只是很小的一块，真正决定能力、安全和可靠性的，是它外面那层 harness。按月份记录的资料见 **[docs/agent-design-space-source-notes_zh.md](./docs/agent-design-space-source-notes_zh.md)**。
+[Graph Engineering 综述](https://arxiv.org/abs/2608.21156)用任务图、智能体图和运行状态图组织这些问题。这是作者提出的分析框架，也承接了已有的图式系统；它可以自然地接到指南中的推理、委派和持久化决策上。
+
+[Codex 本地记忆](https://learn.chatgpt.com/docs/customization/memories)在启用后，将筛选过的经验带入后续会话。当前工作上下文则有另一组设计选择：[v0.153.4 保留摘要式压缩](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/compact.rs)，同时提供使用笔记、可检索历史和新上下文窗口的[实验性上下文管理模式](https://learn.chatgpt.com/docs/config-file/config-reference)。后者改变了长任务跨窗口继续执行的方式，与跨会话的后台经验提取是不同机制。
+
+实验开关在 [Codex CLI 0.153.0](https://github.com/openai/codex/releases/tag/rust-v0.153.0) 中发布，默认关闭，并有账户与后端限制。9 月 6 日的一次源码更新又加入模型支持检查，将内置 GPT-6-Astra 标为支持。[来源说明](./docs/agent-design-space-source-notes_zh.md#source-codex-context-management)区分了这一后续源码修订与 v0.153.4。这是上下文管理协议及模型适配的变化；公开证据尚不能据此证明模型内部新增了某种永久记忆。
+
+具体取舍见[设计指南](./docs/build-your-own-agent_zh.md)；核查的版本、发布日期和证据限制见[来源说明](./docs/agent-design-space-source-notes_zh.md#september-2026)。
 
 <p align="right"><a href="#深入理解-claude-code">↑ 返回顶部</a></p>
 
@@ -310,18 +322,18 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 <details>
 <summary><h2>构建你自己的 AI 智能体：设计指南</h2></summary>
 
-> 本文不是一份写代码的教程，而是一份关于**你必须做出的设计决策**的指南——素材全部来自对 Claude Code 的架构分析。
+> 从 Claude Code 的架构和相关系统出发，讨论构建智能体时需要做出的设计选择。
 
 每个生产级智能体都要面对下列决策：
 
 | 决策 | 问题 | 关键洞察 |
 |:---------|:-------------|:------------|
-| [**推理放在哪里**](./docs/build-your-own-agent_zh.md#决策-1推理放在哪里) | 逻辑放在模型里多，还是 harness 里多？ | 随着模型能力逐渐趋同，harness 才是差异化的关键。 |
-| [**安全姿态**](./docs/build-your-own-agent_zh.md#决策-2你的安全姿态是什么) | 如何防止有害行为？ | 当各层共享故障模式时，深度防御会失效。 |
-| [**上下文管理**](./docs/build-your-own-agent_zh.md#决策-3你如何管理上下文) | 模型究竟看到什么？ | 从第一天起就要为上下文稀缺而设计。渐进式优于一次性截断。 |
-| [**可扩展性**](./docs/build-your-own-agent_zh.md#决策-4你如何处理可扩展性) | 扩展如何接入？ | 并非所有扩展都必须消耗上下文 token。 |
-| [**子智能体架构**](./docs/build-your-own-agent_zh.md#决策-5子智能体如何工作) | 共享上下文还是隔离上下文？ | Plan 模式下的智能体团队消耗约 7 倍 token；靠子智能体只回传摘要，才能避免上下文爆炸。 |
-| [**会话持久化**](./docs/build-your-own-agent_zh.md#决策-6会话如何持久化) | 什么会延续到下一次会话？ | 恢复会话时绝不自动恢复权限。可审计性优先于查询能力。 |
+| [**推理放在哪里**](./docs/build-your-own-agent_zh.md#决策-1推理放在哪里) | 逻辑放在模型里多，还是 harness 里多？ | 明确哪些依赖和检查由代码表达，哪些判断交给模型。 |
+| [**安全姿态**](./docs/build-your-own-agent_zh.md#决策-2你的安全姿态是什么) | 如何防止有害行为？ | 说明每种控制的作用范围，以及检查无法判定时如何处理。 |
+| [**上下文管理**](./docs/build-your-own-agent_zh.md#决策-3你如何管理上下文) | 模型究竟看到什么？ | 分别管理当前对话预算与可复用经验的生命周期。 |
+| [**可扩展性**](./docs/build-your-own-agent_zh.md#决策-4你如何处理可扩展性) | 扩展如何接入？ | 分别设计发现、安装、更新与执行授权。 |
+| [**子智能体架构**](./docs/build-your-own-agent_zh.md#决策-5子智能体如何工作) | 共享上下文还是隔离上下文？ | 明确任务归属、上下文边界和各执行者应返回的证据。 |
+| [**会话持久化**](./docs/build-your-own-agent_zh.md#决策-6会话如何持久化) | 什么会延续到下一次会话？ | 按当前策略恢复任务状态，并明确临时授权的有效期。 |
 
 **阅读完整指南：[docs/build-your-own-agent_zh.md](./docs/build-your-own-agent_zh.md)**
 
@@ -341,11 +353,11 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 | **系统范围与部署** | 面向编程的单用户 CLI / SDK / IDE 接口；所有入口共用一个 `queryLoop` 异步生成器。 | 本地优先 WebSocket 网关（默认端口 18789，默认仅监听回环地址）；将约 23 个消息渠道路由至内嵌智能体运行时；提供 macOS、iOS、Android 伴侣应用。 | 三个入口：`hermes`（交互式 CLI）、`hermes-agent`（程序化运行时）、`hermes-acp`（ACP 服务器）；网关适配器将消息路由至按 LRU 缓存的 AIAgent 实例（最多 128 个，空闲超时 1 小时）；也可通过 `hermes mcp serve` 作为 MCP 服务器运行。 |
 | **信任模型与安全** | 拒绝优先的逐动作评估；7 种权限模式；基于 LLM 的自动模式分类器（`yoloClassifier` / `sideQuery`）；会话级权限状态（会话绕过标志、应用白名单状态）在恢复时不予还原。 | 单一可信操作员模型；DM 配对码、发件人白名单、网关身份验证；每个智能体有独立的工具允许/拒绝策略；通过 Docker / SSH / OpenShell 提供可选沙箱，默认关闭；`non-main` 模式可对非主会话启用沙箱；明确声明不支持对共享网关上的恶意多租户的隔离。 | 危险命令模式检测，配合会话级审批状态；CLI 交互提示与网关异步提示；辅助 LLM 智能审批可自动批准低风险命令；永久白名单持久化于 `config.yaml`；子智能体工作线程默认自动拒绝危险命令（可通过 `subagent_auto_approve` 开启批处理/定时任务的自动批准）。 |
 | **智能体运行时与工具** | 单一 `queryLoop` 异步生成器，以流式事件方式产出；环境与特性门控的工具注册表；API 调用前按条件运行压缩（Snip、Microcompact、Context Collapse、Auto-Compact），Auto-Compact 优先尝试会话记忆压缩。 | 内嵌智能体运行时位于网关 RPC 调度层内部（`agent` RPC 校验参数后立即返回，异步执行，并通过网关协议回传生命周期/流式事件）；每个会话有独立队列序列化，支持可选的全局通道。 | While 循环，含显式的每轮迭代预算和宽限调用槽；每轮检查点去重；网关 `step_callback` 钩子在每次迭代时触发；辅助模型上下文压缩对中间轮次进行摘要，同时保护头尾。 |
-| **扩展架构** | 四种机制按上下文开销递增排列：hooks → skills → plugins → MCP；27 个钩子事件；10 种插件组件类型。 | 清单优先插件系统，含 12 个能力类别；中央注册表暴露工具、渠道、provider 设置、钩子、HTTP 路由、CLI 命令和服务；独立技能层支持多来源（工作区优先级最高）及 ClawHub 公共注册表；`openclaw mcp` 同时提供 MCP 服务器接口和面向其他 MCP 服务器的出站客户端注册表。 | `plugins/` 目录下内置 12 个插件（context_engine、disk-cleanup、example-dashboard、google_meet、hermes-achievements、image_gen、kanban、memory、observability、platforms、spotify、strike-freedom-cockpit）；MCP 服务器（`mcp_serve.py`）暴露 10 个工具；ACP 适配器（`acp_adapter/`）将 Hermes 暴露为 ACP 服务器。 |
+| **扩展架构** | 四种扩展机制：hooks、skills、plugins 和 MCP；上下文开销取决于实际展示的内容；27 个钩子事件；10 种插件组件类型。 | 清单优先插件系统，含 12 个能力类别；中央注册表暴露工具、渠道、provider 设置、钩子、HTTP 路由、CLI 命令和服务；独立技能层支持多来源（工作区优先级最高）及 ClawHub 公共注册表；`openclaw mcp` 同时提供 MCP 服务器接口和面向其他 MCP 服务器的出站客户端注册表。 | `plugins/` 目录下内置 12 个插件（context_engine、disk-cleanup、example-dashboard、google_meet、hermes-achievements、image_gen、kanban、memory、observability、platforms、spotify、strike-freedom-cockpit）；MCP 服务器（`mcp_serve.py`）暴露 10 个工具；ACP 适配器（`acp_adapter/`）将 Hermes 暴露为 ACP 服务器。 |
 | **记忆与上下文** | 四层 CLAUDE.md 层级；API 调用前压缩（Snip、Microcompact、Context Collapse、Auto-Compact）；基于 LLM 从文件型 Markdown 记忆文件中进行选择。 | 工作区启动文件（AGENTS.md、SOUL.md、TOOLS.md、IDENTITY.md、USER.md）及条件性 BOOTSTRAP.md / HEARTBEAT.md / MEMORY.md；独立记忆系统（MEMORY.md、`memory/YYYY-MM-DD.md` 格式的每日笔记、可选 DREAMS.md）；配置 embedding provider 后启用向量+关键词混合检索；实验性 dreaming 在后台整合并将符合条件的条目提升至长期记忆；可插拔压缩 provider。 | SQLite 状态存储，含 FTS5 全文检索和 WAL 模式并发读取；sessions 通过 `parent_session_id` 链接以支持压缩触发的会话拆分；`plugins/memory/` 下提供 8 个可换记忆后端（byterover、hindsight、holographic、honcho、mem0、openviking、retaindb、supermemory）；辅助 LLM 压缩作为独立的上下文管理层。 |
 | **多智能体架构** | 通过侧链转录委托子智能体；6 种内置智能体定义（可用性取决于构建/模式）加自定义；父节点仅接收单条摘要消息（in-process / viewable transcript 情况下可保留更多内部细节）；隔离设置包含 `worktree` 和 `remote`，swarm 路径中有 `in-process` 队友后端。 | 两层架构。(1) 多智能体路由：每渠道独立智能体，拥有各自的工作区、认证配置、会话存储和模型配置，通过确定性绑定规则分发。(2) 子智能体委托：`maxSpawnDepth` 范围 1–5，默认 1，建议 2；工具策略按深度变化；项目愿景（VISION.md）明确拒绝将智能体层级框架作为默认架构。 | `delegate_task` 工具在 `ThreadPoolExecutor` 中派生子 AIAgent 实例（父节点阻塞直至子节点完成）；每个子节点有全新对话历史、独立 `task_id`，以及受限工具集（`DELEGATE_BLOCKED_TOOLS` 移除了 `delegate_task`、`clarify`、`memory`、`send_message`、`execute_code`）；默认深度 `MAX_DEPTH = 1`（可配置，上限为 3）；默认 3 个并发子节点。 |
 
-**对比揭示了什么。** 有三点值得注意。第一，**部署场景**决定了后面大多数设计选择：面向单用户的编程 CLI 收敛于逐动作审批和单一执行循环，多渠道网关收敛于边界信任和渠道绑定的智能体，多部署消息云端智能体则收敛于可选容器/云隔离、LLM 智能审批和可换后端记忆层。第二，**扩展层是各系统最鲜明的差异化所在**：Claude Code 按上下文开销将四种机制分层，OpenClaw 将扩展视为网关层的注册表管理能力，Hermes-Agent 则内置插件组并对外暴露双 MCP 服务器 / ACP 服务器接口供其他智能体接入。第三，**记忆架构分布在一条光谱上**：一端是文件型、可直接查看的 Markdown（Claude Code），中间是文件型再加上可选的向量检索和实验性 dreaming（OpenClaw），另一端是 FTS5 全文索引加八个可换的插件后端，其中包含专用的向量 / RAG provider（Hermes-Agent）。这张表更适合读成设计空间里的三个不同落点，而不是一份功能排行榜。
+**对比揭示了什么。** 有三点值得注意。第一，**部署场景**决定了后面大多数设计选择：面向单用户的编程 CLI 收敛于逐动作审批和单一执行循环，多渠道网关收敛于边界信任和渠道绑定的智能体，多部署消息云端智能体则收敛于可选容器/云隔离、LLM 智能审批和可换后端记忆层。第二，**扩展层是各系统最鲜明的差异化所在**：Claude Code 为四种机制提供不同的扩展入口，OpenClaw 将扩展视为网关层的注册表管理能力，Hermes-Agent 则内置插件组并对外暴露双 MCP 服务器 / ACP 服务器接口供其他智能体接入。第三，**记忆架构分布在一条光谱上**：一端是文件型、可直接查看的 Markdown（Claude Code），中间是文件型再加上可选的向量检索和实验性 dreaming（OpenClaw），另一端是 FTS5 全文索引加八个可换的插件后端，其中包含专用的向量 / RAG provider（Hermes-Agent）。这张表更适合读成设计空间里的三个不同落点，而不是一份功能排行榜。
 
 <p align="right"><a href="#深入理解-claude-code">↑ 返回顶部</a></p>
 
@@ -490,7 +502,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 | [WaveSpeed — "Claude Code Architecture: Leaked Source Deep Dive"](https://wavespeed.ai/blog/posts/claude-code-architecture-leaked-source-deep-dive/) | 512K 行 TS 源码深度剖析；上下文压缩和反蒸馏。 |
 | [Zain Hasan — "Inside Claude Code: An Architecture Deep Dive"](https://zainhas.github.io/blog/2026/inside-claude-code-architecture/) | 分层架构、5 种入口模式、多智能体演练。 |
 | [Addy Osmani — "Agent Harness Engineering"](https://addyosmani.com/blog/agent-harness-engineering/) | 把 harness engineering 视为一门工程学科，给出命名化的原语（文件系统/git 状态、沙箱、AGENTS.md 记忆、压缩、规划循环、hooks）；将 Claude Code 作为最成熟的范例。 |
-| [Addy Osmani — "Loop Engineering"](https://addyosmani.com/blog/loop-engineering/) | 给 "loop engineering" 命名的那篇：你不再亲自给智能体写 prompt，而是搭一个自动去 prompt 它的循环。它的几个部分（自动化任务、worktree、skills、连接器、子智能体，以及一个记录进度的文件）就是本文分析的 harness 层。 |
+| [Addy Osmani — "Loop Engineering"](https://addyosmani.com/blog/loop-engineering/) | 从实践出发，讨论如何用自动化任务、worktree、技能、连接器、子智能体和持久进度记录，搭建持续驱动智能体的循环。适合与本文对外围 harness 的分析对照阅读。 |
 | [Armin Ronacher — "The Coming Loop"](https://lucumr.pocoo.org/2026/6/23/the-coming-loop/) | 把智能体循环（一次运行里的工具调用）和 harness 循环（不停地把智能体重新叫起来再跑一遍的系统）分开来看。作者态度偏保留：循环在移植代码、调优性能、排查安全问题这些活上好用，但它写出来的代码往往偏防御、更难维护，最后还是得人去读、去决定留下哪些。 |
 | [LangChain — "The Art of Loop Engineering"](https://www.langchain.com/blog/the-art-of-loop-engineering) | 讲了围绕智能体搭起来的四层循环：智能体自己的循环、给输出打分再重试的验证循环、由外部事件触发去启动智能体的事件循环，以及读生产 trace 来反过来改进 harness 的 hill-climbing 循环。核心观点是：大部分价值来自这些循环，而不是模型本身。 |
 | [Lilian Weng — "Harness Engineering for Self-Improvement"](https://lilianweng.github.io/posts/2026-07-04-harness/) | 把 harness 定义为"围绕基础模型、编排执行的系统，它决定模型如何思考和规划、如何调用工具并行动、如何感知和管理上下文、如何存储产物、如何评估结果"。核心论断：近期的递归自我改进不会始于模型直接改写自己的权重，而是始于 coding agent 去演化 harness 本身。全文分设计模式、harness 优化、进化搜索、与权重联合优化四条线。 |
@@ -520,6 +532,10 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 | 资源 | 厂商 | 亮点 |
 |:---------|:-------|:---------------|
+| [Codex v0.153.4](https://github.com/openai/codex/releases/tag/rust-v0.153.4) | OpenAI | 以固定版本对照摘要式压缩、实验性上下文窗口管理和跨会话记忆。[来源说明](./docs/agent-design-space-source-notes_zh.md#source-codex-memory)区分各自的启用条件与生命周期，并单列后续加入的模型能力检查。 |
+| [Deep Agents vs LangChain vs LangGraph](https://www.langchain.com/blog/deep-agents-vs-langchain-vs-langgraph) | LangChain | 说明自家 harness、框架与运行时如何组合：智能体循环可以运行在图中，自定义图也可作为子智能体使用。发表于 2026 年 8 月 6 日，是理解指南中“推理放在哪里”的一份较早资料。 |
+| [Cloud Agents and Cursor Harness Improvements](https://cursor.com/changelog/08-19-26)、[Self-hosted machines](https://cursor.com/changelog/self-hosted-machines) | Cursor | 8 月 19 日更新加入事件订阅、长期目标和在独立机器上运行的子智能体；9 月 2 日加入命名 worker 池调度。这些机制说明目标、会话和执行机器可以有不同的生命周期；发布说明尚不足以证明事件或结果能恰好交付一次。 |
+| [托管插件市场更新](https://github.blog/changelog/2026-08-26-enterprise-managed-settings-now-support-autoupdate-for-plugin-marketplaces/)、[app 与 CLI 的内容排除](https://github.blog/changelog/2026-09-02-content-exclusions-generally-available-in-copilot-app-and-cli/) | GitHub | 分别增加插件市场更新控制，以及面向 Business/Enterprise app 与 CLI 用户的上下文排除。两者管理不同环节；内容排除受客户端和输入路径限制，不能等同于通用文件系统沙箱。 |
 | [Harness Engineering: Leveraging Codex in an Agent-First World](https://openai.com/index/harness-engineering/) | OpenAI | 把 harness 定义为让智能体产出可靠、可维护结果所需的约束、反馈回路、文档结构与工具；文中提到，他们一款约百万行代码的 beta 版产品几乎没有一行是人工编写的。 |
 | [Codex 0.147.0](https://github.com/openai/codex/releases/tag/rust-v0.147.0) | OpenAI | 插件目录现在可以汇总本地、个人、工作区和远端来源，并新增 `--approve-for-me`、MCP 2026-07-28 的可选实现、远端压缩、对话分节，以及从 Cursor 导入技能、从 Claude 和 Cursor 导入对话。安全方面，首次进入陌生的本地项目需要显式确认，历史和回放中的 bearer token 会被遮蔽；插件策略更新失败时，网络访问默认关闭。 |
 | [Deep Agents v0.7](https://www.langchain.com/blog/deep-agents-v0-7) | LangChain | 删除基础系统提示和默认待办中间件，把内置工具描述缩短 43%，首轮基础输入从约 6K 降到 2K token；报告中的多模型评测没有显示整体得分明显下降。文章还说明了待办规划适合哪三类任务，并开放摘要阈值、搜索截断和文件分页等控制项。与上面的 Anthropic 文章相比，这项工作还给出了跨模型评测。 |
@@ -556,6 +572,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 | 资源 | 厂商 | 亮点 |
 |:---------|:-------|:---------------|
+| [Temporal Deep Agents 集成](https://docs.temporal.io/develop/python/integrations/deepagents)、[Workflow Pause](https://docs.temporal.io/encyclopedia/workflow/workflow-pause) | Temporal | [8 月 27 日月报](https://temporal.io/blog/durable-digest-august-2026)将两者列为预发布功能。集成把控制循环放进可重放的 Workflow，把模型调用放进 Activity；有真实 I/O 的工具和后端需要显式包装。暂停会停止新任务派发，在途 Activity 仍可能完成。 |
 | [Bedrock AgentCore Harness 正式可用](https://aws.amazon.com/blogs/machine-learning/amazon-bedrock-agentcore-harness-is-now-generally-available-go-from-idea-to-production-grade-agent-in-minutes/) | AWS | harness 不再是你自己写的一个循环，而变成了托管的配置对象：`CreateHarness` 和 `InvokeHarness` 声明模型、工具、skills、记忆策略和容器环境，底层封装七个原语（microVM Runtime、Memory、Gateway、沙箱 Browser、Code Interpreter、Identity token vault、Observability）。这给设计空间加了一个新坐标：loop、环境和工具边界到底归谁所有。 |
 | [AgentCore policy 与 Guardrails](https://aws.amazon.com/about-aws/whats-new/2026/06/amazon-bedrock-agentcore-policy-guardrails-generally-available/) | AWS | 强制执行发生在 gateway 边界，也就是 agent 代码之外，因此无论 agent 变得多自主都照样生效。这与"在环内做权限检查"是截然不同的架构选择。 |
 | [Running Untrusted Agent Code Without a Sandbox](https://www.langchain.com/blog/running-untrusted-agent-code-without-a-sandbox) 与 [Dynamic Subagents in Deep Agents](https://www.langchain.com/blog/introducing-dynamic-subagents-in-deep-agents) | LangChain | 与容器模型完全反过来的能力隔离：WASM 里的 QuickJS 从"零能力"起步，每一项能力都由 harness 显式桥接进来。解释器内存可以被序列化，从而实现一次等待人工批准的持久暂停。子智能体的派发随之从"对话回合"降到"程序控制流"，由模型写一段脚本去调用 `task({...})`。 |
@@ -588,6 +605,8 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 | 资源 | 来源 | 它说明了什么 |
 |:---------|:-------|:--------------|
+| [LoopArena](https://arxiv.org/abs/2608.28281) | arXiv | 固定执行者，比较决定任务如何推进的控制者，从而区分管理、停止决策与单步执行能力。论文所述任务切片带来的成本节省属于评测协议，不能解读成增加控制者就能降低生产成本。 |
+| [构建智能体环境与任务](https://www.langchain.com/blog/building-agent-environments-and-tasks)、[Tuned Evaluators](https://www.langchain.com/blog/introducing-langsmith-tuned-evaluators-starting-with-perceived-error) | LangChain | 将生产反馈接到可审查的任务规格、可执行环境和回归检查。Perceived Error 用于发现值得调查的案例，是用户体验的代理信号，不能直接判定任务成功或失败。 |
 | [ClawBench: Can AI Agents Complete Everyday Online Tasks?](https://arxiv.org/abs/2604.08523)（[代码](https://github.com/reacher-z/ClawBench) · [项目主页](https://claw-bench.com/) · [数据集](https://huggingface.co/datasets/NAIL-Group/ClawBench)） | arXiv | 在真实站点上跑的浏览器智能体基准，V1+V2 共 283 个任务，覆盖 163 个网站。每次运行都在隔离的浏览器容器里执行，判定上把请求拦截与 LLM 裁判结合起来，同时保留回放、截图、HTTP 流量、浏览器动作和智能体消息，便于事后核查。它对 harness 这个问题的意义在于，把"真实网站"这个评测里最不可控的变量，做成了一次运行可以被复现的环境。 |
 | [Harness-Bench: Measuring Harness Effects across Models in Realistic Agent Workflows](https://arxiv.org/abs/2605.27922) | arXiv | 106 个沙箱任务、5,194 条执行轨迹，在任务环境、预算与评测协议全部固定的前提下，只让 harness 配置在不同模型后端之间变化。文中给一类反复出现的现象起名为 execution-alignment failure：看起来合理的推理与工具反馈、工作区状态脱节。结论是智能体能力「应当在 model-harness 配置这一层级上报告，而不是归因于基座模型本身」。 |
 | [Position: Coding Benchmarks Are Misaligned with Agentic Software Engineering](https://arxiv.org/abs/2606.17799) | arXiv | 主张「实践中的代码智能体不是一个模型，而是一套系统 harness」，因此端到端分数把模型、harness、上下文、环境与反馈信号混在了一起，其中任何一项都能让分数移动「与相邻两代模型之间的差距相当的幅度」。文中还指出以单一参考答案打分会惩罚同样成立的其他解法。 |
@@ -608,6 +627,8 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 | 论文 | 会议 | 相关性 |
 |:------|:------|:------|
+| [Graph Engineering in the Era of LLM Agents: From Individual Intelligence to System Intelligence](https://arxiv.org/abs/2608.21156) | arXiv | Feng 等人以任务图、智能体图和运行状态图组织智能体系统的设计问题，在一个明确的框架下联系依赖、协作与可恢复状态，并梳理已有图式系统的发展。 |
+| [HarnessLens](https://arxiv.org/abs/2608.27311) | arXiv | 将候选 harness 修改与行为假设、相关验证任务和已有成功案例关联，再用新一批任务确认。在所选任务上未观察到回归，并不保证普遍无回归；实验也未统一所有方法的总计算预算。 |
 | [Meta-Harness: End-to-End Optimization of Model Harnesses](https://arxiv.org/abs/2603.28052) | arXiv | 让一个 coding agent 充当 proposer，在模型固定的前提下去搜索 harness 本身（记忆、检索、上下文构造、prompt、工具使用逻辑），维护一个候选种群和一条 Pareto 前沿。结果是：比当前最好的上下文管理系统高出 7.7 分，同时少用 4 倍上下文 token；搜出来的 harness 在 TerminalBench-2 上超过了最好的手工设计基线。它把 harness 从"人手工设计的东西"变成了"可以被优化的对象"。 |
 | [From Question Answering to Task Completion: A Survey on Agent System and Harness Design](https://arxiv.org/abs/2606.20683) | arXiv | 同期出现的综述，用 model-harness 视角把执行 harness 拆成六项相互耦合的运行时职责：observation、context、control、action、state、verification。是与本文框架结构上最接近的一篇。 |
 | [Architectural Design Decisions in AI Agent Harnesses](https://arxiv.org/abs/2604.18071) | arXiv | 基于源码、对 70 个 agent 系统项目的研究，识别出反复出现的设计维度；与本文设计空间框架最贴近的同期对照工作。 |
@@ -638,7 +659,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 | [Why Does CLAUDE.md Keep Growing? Catastrophic Remembering in Agentic Coding](https://arxiv.org/abs/2608.11095) | arXiv | 挖掘 1,867 个仓库中 247,694 条指令的生命周期，发现常驻指令文件在其生命周期内增长 226%，因为加一条规则很便宜、而在依赖不确定的情况下删一条很难。加上解释性注释能把超额增长从 211.3% 压到 1.4%，并把指令遵循度提升最多 23.1%。这是关于本文所分析的 CLAUDE.md 记忆机制的直接实证。 |
 | [A Study of Cursorrules Files in GitHub Open Source Projects](https://arxiv.org/abs/2608.10622) | ICSOFT 2026 | 对 11,427 个仓库中 12,110 个 `.cursorrules` 与 `.mdc` 文件的实证研究：开发者如何为代码智能体编码项目上下文与工程规范，以及这一格式如何演变。它是已列出的 CLAUDE.md 配置研究在 Cursor 一侧的对照，也是上面那篇 CLAUDE.md 增长论文的姊妹篇。 |
 | [The Devil Is in the Interface: Evaluating How Tool Architecture Shapes Coding Agent Behavior](https://arxiv.org/abs/2608.11386) | arXiv | 在保持能力不变的前提下，对六种工具架构（纯 bash、结构化的低层工具、自然语言检索，以及一种 Python CodeAct 风格）跨 11,700 条轨迹做受控消融。结构化接口把逐次运行的一致性提升最多 4.7 倍，CodeAct 风格把步数砍掉 41.6%、token 砍掉 56.3%。它延续了本列表里 `execute_code` 消融所开启的工具面设计问题。 |
-| [One Recipe, Many Harnesses: What Self-Evolution Encodes Across Languages and Models](https://arxiv.org/abs/2608.10178) | arXiv | 让一种 harness 自演化方法（agent 检视自己的 rollout，改写自己的提示、工具与记忆）跑遍八种语言和三个基座模型，发现一个共享的抽象补偿模式，其具体形态随语言而异，且演化出的修复针对的是可恢复的执行失败，而不是过拟合基准。它为本列表追踪的 harness 演化之争补上了跨语言的证据。 |
+| [One Recipe, Many Harnesses: What Self-Evolution Encodes Across Languages and Models](https://arxiv.org/abs/2608.10178) | arXiv | 在八种语言和三个基础模型上评估同一种 harness 自演化方法，收益因设置而异：通用工作方法比特定生态规则更容易迁移。研究记录预期收益与可能回归，但尚未把完整演化预算与增加测试时推理的方案做等预算比较。 |
 | [Persistent Recursive Worlds Enable Autonomous Software Evolution](https://arxiv.org/abs/2608.10450) | arXiv | 把软件项目本身（一个被接受的版本加一个仓库路径）作为持久单元，从而让 agent 保持有限生命周期、而开发无限期继续。一个 Rust 版 C 编译器在 120 小时、1,000 多个 agent 回合里以约 44 美元建成，并在中途整个更换 agent 后依旧存活。这是一种把连续性放在产物、而非 agent 记忆里的会话持久化设计。 |
 | [Agent Safety Should Be a Runtime Contract](https://arxiv.org/abs/2608.11274) | arXiv | 主张对会执行代码、改动文件的 agent 而言，训练期对齐在结构上并不够，安全必须是一份由 harness 强制执行的运行时契约：把预防性控制（沙箱、权限闸、输出过滤）与基于可核验轨迹证据（测试、日志、diff）的证据式验证配对。它是本列表里 ActPlane 与 SHarD 的立场论文同伴。 |
 
@@ -687,6 +708,7 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 | 仓库 | 推出时间 | 重点 |
 |:-----------|:-------|:------|
+| [**context4ai/agent-graph**](https://github.com/context4ai/agent-graph/tree/387f80db65bf20a61bc666b4fa885200fcedad08) | 2026 年 | 以 v0.3.0 为核查版本，提供工作契约与基于事实的路由。对于定义了事实条件的非终结节点，即使已记录完成，条件不匹配时仍会被标为未验证；执行与事实真实性的验证仍由接入它的宿主系统负责。 |
 | [**geekan/MetaGPT**](https://github.com/geekan/MetaGPT) [![Star](https://img.shields.io/github/stars/geekan/MetaGPT.svg?style=social&label=Star)](https://github.com/geekan/MetaGPT) | 2023 年 | 角色分工的多智能体软件公司模拟（ICLR 2024 oral）。 |
 | [**microsoft/autogen**](https://github.com/microsoft/autogen) [![Star](https://img.shields.io/github/stars/microsoft/autogen.svg?style=social&label=Star)](https://github.com/microsoft/autogen) | 2023 年 | 微软研究院多智能体对话框架（COLM 2024）。 |
 | [**microsoft/agent-framework**](https://github.com/microsoft/agent-framework) [![Star](https://img.shields.io/github/stars/microsoft/agent-framework.svg?style=social&label=Star)](https://github.com/microsoft/agent-framework) | 2025 年 | 微软整合 AutoGen 与 Semantic Kernel 的后继框架（2026 年 4 月发布 1.0）。在 BUILD 2026 上加入了内置的 agent harness（上下文压缩、文件记忆、shell）和 CodeAct：让模型把多次工具调用写成一段 Python 一次跑完，而不是一次只调一个。 |
@@ -704,8 +726,10 @@ Claude Code 回答了每个生产级编码智能体都必须面对的**四个设
 
 ### 记忆与持久化上下文
 
-| 仓库 | 推出时间 | 重点 |
+| 资源 | 日期 / 版本 | 重点 |
 |:-----------|:-------|:------|
+| [**Codex 实验性上下文管理**](https://learn.chatgpt.com/docs/config-file/config-reference) | CLI 0.153.0，2026 年 9 月 3 日 | 可选的工作上下文管理方式，使用笔记、可检索历史和 `new_context`。其 token-budget 路径通过新建窗口跳过模型或服务端摘要，同时保留 compaction 生命周期。账户、后端、版本及后续模型支持限制见[来源说明](./docs/agent-design-space-source-notes_zh.md#source-codex-context-management)。 |
+| [**Codex 本地记忆**](https://learn.chatgpt.com/docs/customization/memories) | 2026 年 9 月核查 | 启用后，从符合条件的旧会话中后台提取、整合经验，通过简短索引按需读取详细记忆。本地存储与 ChatGPT 网页记忆、实验性工作上下文笔记分别管理；[v0.153.4 也仍保留摘要式压缩](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/compact.rs)。 |
 | [**mem0ai/mem0**](https://github.com/mem0ai/mem0) [![Star](https://img.shields.io/github/stars/mem0ai/mem0.svg?style=social&label=Star)](https://github.com/mem0ai/mem0) | 2024 年 | 生产级记忆层，含 LoCoMo 与 LongMemEval 基准（arXiv:2504.19413）。 |
 | [**letta-ai/letta**](https://github.com/letta-ai/letta) [![Star](https://img.shields.io/github/stars/letta-ai/letta.svg?style=social&label=Star)](https://github.com/letta-ai/letta) | 2023 年 | 有状态智能体平台，OS 式分层记忆分页（原 MemGPT，COLM 2024）。 |
 | [**MemPalace/mempalace**](https://github.com/MemPalace/mempalace) [![Star](https://img.shields.io/github/stars/MemPalace/mempalace.svg?style=social&label=Star)](https://github.com/MemPalace/mempalace) | 2026 年 | AI 智能体的本地优先记忆系统。 |

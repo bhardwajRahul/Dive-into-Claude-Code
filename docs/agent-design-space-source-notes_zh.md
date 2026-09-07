@@ -1,18 +1,145 @@
-# Agent Systems Design Space 新进展资料记录
+[返回主 README](../README_zh.md)
 
-基础检索窗口：2026-06-25 至 2026-07-30 · 最新增量：2026-08-07
+<a id="agent-systems-design-space-新进展资料记录"></a>
 
-本页记录与 agent system design space 高度相关、且来源质量足够高的新进展。每条资料保留发布年月，方便后续持续追加和比较。
+# 智能体系统设计空间：来源笔记
 
-英文版见 [agent-design-space-source-notes.md](./agent-design-space-source-notes.md)，其中收录了 2026-06-25 至 2026-07-30 窗口的候选资料（按 P0/P1/P2 分桶），并为每条标注了拟归入的 README 小节。
+基础检索窗口：2026-06-25 至 2026-07-30 · 最近核对：2026-09-07
 
-本页汇总关于 agent system 设计空间的高信号资料，重点关注高层原则、运行时机制、权限与治理、上下文/记忆、工具连接、长程执行、多 agent 编排和评测安全。资料来自并行子代理检索后的人工合并与去重。
+本页记录主目录和设计指南所依据的来源，同时保留候选资料与早期检索记录。每条资料注明日期、实际阅读范围和重要限制，方便后续复核。
+
+英文版见 [agent-design-space-source-notes.md](./agent-design-space-source-notes.md)。本次 9 月更新在两种语言中保持一致，旧日志保留各自原有的覆盖范围；当前收录情况以双语 README 为准。
+
+资料围绕设计原则、运行时、权限、上下文与记忆、工具连接、长期执行、多智能体编排和评测整理，经过并行检索、交叉核对与去重。
 
 ## 用语约定
 
 - 产品名、API 标识符、命令和论文定义的专有术语保留原文；普通技术概念尽量使用自然中文，不为显得专业而夹杂英文。
 - 分清论文报告的结果、作者自己的解释和本目录的判断。除非来源能够证明，否则不用“首次”“最强”“必然”“彻底解决”之类的说法。
 - 主目录中的说明应交代机制、证据和主要限制。主题相近的资料只有在回答不同设计问题时才同时保留。已经入选的链接仍可留在本页作为筛选记录，但不算主目录重复收录。
+
+<a id="september-2026"></a>
+
+## 9 月整合：截至 2026-09-07 的来源核对
+
+本轮接续主目录的 [8 月 16 日内容更新](https://github.com/VILA-Lab/Dive-into-Claude-Code/commit/a82805c2cd2ed396303aec96f7f8f2124e97869c)，主要检索 **8 月 16 日至 9 月 7 日**，并回查 **8 月 7–15 日**的遗漏。更早的资料和没有发布日期的在线文档分别标明；日期以来源的发布记录为准，GitHub release 使用 UTC 日期。版本发布日期用于固定阅读对象，不代表该版本中的每项机制都在当天首次出现。
+
+下面的资料围绕仓库已有的设计问题展开：怎样组织工作、积累经验、约束执行，以及判断改进是否成立。阅读范围涵盖 9 月 7 日的资料检索和本次整合核对。我们阅读了一手文档和部分实现路径，没有复现论文实验，也没有实测托管产品。
+
+<a id="source-graph-engineering"></a>
+
+### S1. Graph Engineering：组织任务、智能体与运行状态
+
+[Graph Engineering in the Era of LLM Agents](https://arxiv.org/abs/2608.21156v2) 首次提交于 **8 月 21 日**；本轮阅读 **8 月 26 日的 v2**。已读[正文 §§2–5 和附录 11](https://arxiv.org/html/2608.21156v2)中的定义与代表机制，重点是 §4 的任务组织、智能体协调和运行状态管理；仅浏览部分参考文献，未逐篇核验。
+
+**纳入方式：**用这三个相互关联的视角深化已有的编排与持久化讨论。综述提供了一套有用的组织框架；“System Intelligence”及其范式递进是作者的主张。它没有证明图式协作始于 8 月，也没有证明这种设计在所有任务上都优于其他方案。
+
+<a id="source-agent-graph"></a>
+
+### S2. Agent Graph：让完成状态有事实依据
+
+[Agent Graph v0.3.0](https://github.com/context4ai/agent-graph/releases/tag/v0.3.0) 发布于 **8 月 31 日**，源码固定到 [`387f80d`](https://github.com/context4ai/agent-graph/tree/387f80db65bf20a61bc666b4fa885200fcedad08)。已读 README、[设计文档](https://github.com/context4ai/agent-graph/blob/387f80db65bf20a61bc666b4fa885200fcedad08/docs/en/graph-engineering.md)核心章节，以及部分 evaluator、router 和测试代码。对于设置了 `satisfiedBy` 的非终止节点，若记录为完成但所需事实不匹配，[求值器](https://github.com/context4ai/agent-graph/blob/387f80db65bf20a61bc666b4fa885200fcedad08/src/evaluator.ts#L137)会返回 `unverified`。
+
+**纳入方式：**放入智能体框架与编排栏目，作为工作契约的具体例子。执行和事实来源的可信度仍由宿主系统负责。本轮只做静态阅读，未完成代码审计或运行测试。核心设计文档早于该版本，8 月 31 日对应的是类型化资源更新。
+
+<a id="source-codex-memory"></a>
+
+<a id="s3-codex跨会话记忆与上下文压缩并存"></a>
+
+### S3. Codex：工作上下文与跨会话记忆
+
+[Memories 文档](https://learn.chatgpt.com/docs/customization/memories)**未标发布日期，本轮于 9 月 7 日读取**，覆盖本地存储、会话筛选和单次聊天控制。文档区分了本地 Codex 记忆与 ChatGPT web、Work 的记忆机制；所述本地记忆为可选功能，默认关闭。
+
+实现说明固定到 **9 月 4 日**发布的 [`rust-v0.153.4`](https://github.com/openai/codex/releases/tag/rust-v0.153.4)，提交为 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`。已读记忆管线 README，选读启动、提取、整合、读取扩展的代码与相关提示模板。[Phase 2](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/memories/write/src/phase2.rs)在全局锁保护下整合提取出的运行经验；[读取模板](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/ext/memories/templates/memories/read_path.md)从简短摘要定位可检索的记忆，再按需读取支持记录。[压缩实现](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/compact.rs#L63)仍保留自动与手动压缩，[CLI 命令文档](https://learn.chatgpt.com/docs/developer-commands?surface=cli)也仍列出 `/compact`。
+
+**纳入方式：**区分当前工作上下文的管理与供后续运行使用的经验，跨会话 Memories 与下面的实验性工作上下文机制分别说明。整合模板中的来源追踪和删除要求是模型应遵循的行为，尚不能当作经过验证的删除保证。[在线配置文档](https://learn.chatgpt.com/docs/config-file/config-reference)与[该版本的默认常数](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/config/src/types.rs#L48)在候选会话的时间范围和数量上存在差异，因此首页不提供脱离版本的默认值。本轮没有运行客户端或评测端到端记忆质量。
+
+<a id="source-codex-context-management"></a>
+
+#### 实验性工作上下文管理
+
+**9 月 3 日**的 [0.153.0 发布](https://github.com/openai/codex/releases/tag/rust-v0.153.0)加入 `features.context_management.experimental_mode`。[配置文档](https://learn.chatgpt.com/docs/config-file/config-reference)于 9 月 7 日读取，说明该模式通过笔记和可检索历史保留细节，改变反复压成单一摘要的方式。开关默认关闭；这一启用路径要求使用 Codex 后端的合格 ChatGPT Plus、Pro 或 Pro Lite 会话，排除 API key、自定义提供方和临时结构化线程。
+
+本次读取了[激活功能的提交](https://github.com/openai/codex/commit/cff76fa96f70f9f3b63d221446fd02cfd87e6d2e)，以及固定 v0.153.4 的 [token-budget 激活逻辑](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/token_budget.rs)、[压缩分支](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/compact_token_budget.rs)、[新窗口处理器](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/tools/handlers/new_context_window.rs)、[历史与笔记工具定义](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/ext/history-notes/src/tools.rs)，并选读扩展和后端代码。token-budget 的手动、自动路径都会跳过模型或服务端摘要，直接创建新窗口，同时保留 compact 钩子与 `ContextCompaction` 事件。模型指导要求写入检查点，并借助窗口和条目标识找回历史。这改变了上下文切换的具体实现，不能据此说所有 compaction 接口都已删除。
+
+**Astra 与版本范围：**[9 月 6 日的源码更新](https://github.com/openai/codex/commit/6af345407d9c2a568da9d01b6c4b81a9e61495c0)加入 `supports_experimental_context`，并为内置 `gpt-6-astra` 设置支持标志；v0.153.4 尚无这一检查。[v0.153.4 模型目录](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/models-manager/models.json)明确将 Astra 的 token-budget/history-notes 激活设为关闭，旧模型也已有相关指导。激活功能提交的父版本已包含 token-budget 基础机制。这些证据支持“Codex 的实验协议及后续 Astra 适配”，不能证明模型内部首次出现记忆。[Astra API 指南](https://developers.openai.com/api/docs/guides/latest-model)也仍单独列出 compaction 支持。
+
+[模型元数据](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/token_budget.rs#L128)还可以独立于这一实验开关激活 token budgeting，[远端模型目录](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/models-manager/src/manager.rs#L412)也可以覆盖内置元数据。因此，不能仅凭内置默认值判定某个账户实际是否启用。
+
+**设计意义与限制：**应把笔记完整性、原始证据检索和窗口重置后的恢复，与普通摘要及跨会话记忆一起评估。本轮阅读了公开代码与文档，未实测后端、读取账户的远端模型目录，或验证生产环境的启用范围和效果。9 月 6 日修订属于后续源码证据，不能写成 0.153.4 的已发布行为。
+
+<a id="source-composable-layers"></a>
+
+### S4. 运行时、框架与 harness 可以组合
+
+[Deep Agents vs LangChain vs LangGraph](https://www.langchain.com/blog/deep-agents-vs-langchain-vs-langgraph) 发布于 **8 月 6 日，作为较早的背景资料补入**。已读全文，重点是各层职责和组合示例；同时选读未标发布日期的 [Graph API 文档](https://docs.langchain.com/oss/python/langgraph/graph-api)，覆盖状态、reducer、条件边、`Send`、`Command` 和图迁移。
+
+**纳入方式：**细化设计指南中 agent loop 与图的比较。图中可以包含由模型决策的循环，也可以动态选择下一步；结构如何定义、执行时如何决策，是可以分别选择的设计维度。三层命名描述的是 LangChain 自己的技术栈，不是统一行业标准。LangGraph 已在目录中，这些 API 也没有被确认为本期新增。示例未执行。
+
+<a id="source-cursor-runtime"></a>
+
+### S5. Cursor：分别管理目标、事件订阅和执行机器
+
+已读 **8 月 19 日**[云端智能体与 harness 更新](https://cursor.com/changelog/08-19-26)及 **9 月 2 日**[自托管机器公告](https://cursor.com/changelog/self-hosted-machines)的完整正文。前者描述云端事件订阅、`/goal`、拥有独立项目副本和 VM 的子智能体，以及在下一次工具调用时接收引导；后者描述命名 worker 队列和空闲机器休眠。
+
+**纳入方式：**在已有云端智能体内容上，补充目标、会话、事件源和执行资源各自的生命周期。这些机制来自厂商文档。公告未说明事件排序、去重或外部副作用保证；本轮未实测恢复过程，也不据此推断所有发往模型的数据都留在 worker 所在网络内。
+
+<a id="source-temporal-runtime"></a>
+
+### S6. Temporal：重放与暂停的边界
+
+**8 月 27 日**的 [Durable Digest](https://temporal.io/blog/durable-digest-august-2026) 将 Deep Agents 集成和 Workflow Pause 标为 **pre-release**。已读该发布段落，以及当前未标日期的[集成文档](https://docs.temporal.io/develop/python/integrations/deepagents)和[暂停文档](https://docs.temporal.io/encyclopedia/workflow/workflow-pause)，覆盖模型与工具执行、I/O 包装、重试、续跑及在途动作。
+
+**纳入方式：**把恢复责任写具体。模型调用作为 Activity 执行，会访问外部资源的工具和后端需要按文档规定进行包装；`continue-as-new`携带消息与结果缓存，其他状态需要重建。暂停会阻止新任务派发，已运行的 Activity 和计时器仍可继续，也不会递归暂停子工作流。这些边界限定了月报中的概括。本轮没有运行 SDK 或验证崩溃恢复，不将其写成 GA 或外部副作用“恰好一次”的保证。
+
+<a id="source-copilot-governance"></a>
+
+### S7. Copilot：插件更新与上下文准入
+
+已读[插件市场 `autoUpdate`](https://github.blog/changelog/2026-08-26-enterprise-managed-settings-now-support-autoupdate-for-plugin-marketplaces/)（**8 月 26 日**）及[应用和 CLI 的内容排除](https://github.blog/changelog/2026-09-02-content-exclusions-generally-available-in-copilot-app-and-cli/)（**9 月 2 日**）两篇公告全文。另选读[托管设置](https://docs.github.com/en/enterprise-cloud@latest/copilot/reference/enterprise-administrators/enterprise-managed-settings)的优先级、插件市场、权限、MCP 和沙箱章节，并读完[内容排除文档](https://docs.github.com/en/copilot/concepts/context/content-exclusion)；这两份文档未标日期。
+
+**纳入方式：**深化已有 Agent Plugins 和权限条目。插件来源的更新策略、执行授权，以及内容能否进入上下文，各有自己的作用范围。应用和 CLI 的排除公告适用于 Business 和 Enterprise；文档仍注明编辑器 Edit/Agent 模式不支持，并列出间接语义信息、符号链接和远程文件系统的限制。不能据此宣称所有 OS 访问路径都受控，或已保留的记忆会被清除。客户端行为未实测。
+
+<a id="source-looparena"></a>
+
+### S8. LoopArena：单独评测外层控制者
+
+[LoopArena](https://arxiv.org/abs/2608.28281v1) 发布于 **8 月 28 日，版本 v1**。已读[正文 §§2–5、§7 及预算和协议附录](https://arxiv.org/html/2608.28281v1)，核对仓库的协议入口，未运行实现。该基准固定 Worker，根据只读 Reporter 提供的证据，评测 Controller 选择推进、验证或停止的能力。
+
+**纳入方式：**与 LoopsBench 并列，区分控制者的决策质量与整套编码系统的表现。实验覆盖一种 Worker 配置和 27 个源任务。文中的 64.4% 成本下降比较的是任务切片与完整任务评测，不能写成增加 Controller 带来的节省；Reporter 的摘要也不是重新执行的验证。结果均为作者报告。
+
+<a id="source-harnesslens"></a>
+
+### S9. HarnessLens：围绕具体改动安排验证
+
+[Verify Smarter, Evolve Further](https://arxiv.org/abs/2608.27311v1) 发布于 **8 月 27 日，版本 v1**。已读[正文 §§3–6、限制与部分评测附录](https://arxiv.org/html/2608.27311v1)，并检查仓库的独立测试入口。HarnessLens 先确认改动确实加载，再选择能暴露目标行为及潜在回归的任务，并在接受改动前做进一步确认。
+
+**纳入方式：**作为 harness 演化中分配验证预算的实例。实验使用一个模型家族、三套 harness 和四个基准；预算混合统计会话与任务试验，没有对齐美元、token 或延迟。样本中的回归检查不能保证所有场景均无回归。它补充了已有的公平预算讨论，本轮未复现实验。
+
+<a id="source-production-evals"></a>
+
+### S10. 从生产轨迹到可执行评测任务
+
+已读两篇官方文章全文：[How We Build Agent Environments & Tasks](https://www.langchain.com/blog/building-agent-environments-and-tasks)（**8 月 25 日**）及 [LangSmith Tuned Evaluators](https://www.langchain.com/blog/introducing-langsmith-tuned-evaluators-starting-with-perceived-error)（**8 月 18 日**）。前者先形成经人工审查的 Task Spec 和共享 World Spec，再生成可执行的 Harbor 任务；后者用版本化裁判标出值得调查的对话。
+
+**纳入方式：**为已有的“观测—改进”循环补上轨迹、审查后的规格、可运行任务和回归检查之间的具体连接。Perceived Error 被官方明确称为满足用户需求的代理信号，不能直接作为最终正确性判断。任务生成文章提供的是工程经验，尚非受控实验。本轮没有使用托管裁判，也没有把其成本和准确率宣称视为已独立验证的结果。
+
+### 较早资料与本轮未采用的主张
+
+| 资料 | 阅读范围与处理 |
+|:---|:---|
+| [TRIAGE / One Recipe, Many Harnesses](https://arxiv.org/abs/2608.10178v1)，8 月 10 日 | 已在 8 月 16 日入选。已读 §§3–4、附录 A.4、B、C.1–C.2、H 及演化产物实例。本轮深化通用经验与生态专用适配的边界；总优化预算尚未与强替代方法对齐。这是已有条目的复核。 |
+| [Deep Agents v0.7](https://www.langchain.com/blog/deep-agents-v0-7)，7 月 29 日；[OpenAI harness engineering](https://openai.com/index/harness-engineering/)，2 月 11 日 | 均已收录。本轮重读前者的消融与模型比较、后者的仓库知识、反馈和维护机制，用作背景，不算 8–9 月的新发布。 |
+| [Deterministic Execution Constraints](https://arxiv.org/html/2608.26197v1)，8 月 25 日 | 保留候选。已读 §§3–8 和表 1–3；HTML 摘要中的完美复现措辞与表 2 不一致，且只使用两个小型合成任务。本轮不采用其对总体可靠性的强结论。 |
+| [HEART / Agent-Native Reusable Tool Primitives](https://arxiv.org/html/2609.01736v1)，9 月 1 日 | 保留候选。已读 §§3–4、附录 E.3 和 G；token 成本、API 成本与多智能体总消耗不可混用，表格与正文的一处结果也不一致。本轮不采用总体节省或普遍防止提示注入的主张。 |
+| [Claude Code v2.1.259](https://github.com/anthropics/claude-code/releases/tag/v2.1.259) 与 [v2.1.260](https://github.com/anthropics/claude-code/releases/tag/v2.1.260)，9 月 2–3 日 | 已读相关权限发布说明。v2.1.260 回滚了 v2.1.259 对 Bash 参数扩大应用 `Read()` deny 规则的改动。目录应描述变更后的实际状态，不能把每项公告累加为仍生效的功能。这里只核实发布声明，未复现漏洞。 |
+
+### 历史记录的状态
+
+下面保留早期检索及当时的筛选决定。“候选”“遗漏”、星标数量和验证总数均对应原记录时点，不构成今天的覆盖审计。后来进入双语 README 的条目仍保留在这里，便于追溯。
+
+[8 月 16 日更新](https://github.com/VILA-Lab/Dive-into-Claude-Code/commit/a82805c2cd2ed396303aec96f7f8f2124e97869c)还收录了英文旧记录中的两个未解决线索：Codex Security CLI/SDK 已进入跨厂商工程栏目，Senior SWE-bench 已进入评测栏目。英文表格已同步标注这一收录状态。本轮没有重新执行整个 7 月资料审计。
+
 
 ## 每周增量：2026-07-31 至 2026-08-07
 

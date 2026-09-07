@@ -2,11 +2,11 @@
 
 # Agent Systems Design Space: Source Notes
 
-Base sweep: 2026-06-25 to 2026-07-30 · Latest addendum: 2026-08-07
+Base sweep: 2026-06-25 to 2026-07-30 · Latest review: 2026-09-07
 
-This page is the English counterpart to [agent-design-space-source-notes_zh.md](./agent-design-space-source-notes_zh.md). It records candidate sources for the catalogs in the main README, with the publication month kept per entry so the list can be extended and compared month over month.
+This page records the sources behind the catalog and design guide, alongside candidates and earlier research notes. The [Chinese counterpart](./agent-design-space-source-notes_zh.md) contains the same September update; the older logs retain their original scope.
 
-Everything below is a **candidate**, not a catalog entry. Each row carries the section it would go into, so promoting an entry is a copy into `README.md` and `README_zh.md` rather than a routing decision made twice.
+The bilingual README is the current catalog. This page explains which sources support an entry, what was actually read, and which limits should survive a shorter description.
 
 > **Maintainers:** this file is a research log. Catalog entries themselves belong in `README.md` and `README_zh.md`.
 
@@ -15,6 +15,129 @@ Everything below is a **candidate**, not a catalog entry. Each row carries the s
 - Keep product names, API identifiers, commands, and paper-defined terms in their original form; translate ordinary technical prose instead of mixing languages for effect.
 - Separate reported results, the source author's interpretation, and our own catalog judgment. Avoid rankings, superlatives, and claims of inevitability unless the source establishes them.
 - A catalog description should identify the mechanism, the evidence, and the main limitation. Similar sources stay only when they answer different design questions. A promoted URL may still appear in this research log as an audit trail; that is not a second catalog entry.
+
+<a id="september-2026"></a>
+
+## September integration — sources checked on 2026-09-07
+
+This update follows the catalog's [August 16 content update](https://github.com/VILA-Lab/Dive-into-Claude-Code/commit/a82805c2cd2ed396303aec96f7f8f2124e97869c). The main search window is **August 16–September 7**, with **August 7–15** checked for gaps. Earlier sources and undated documentation are identified separately. Dates follow the source's publication history; GitHub release dates use UTC. A release date anchors the version inspected; it does not establish when every mechanism first appeared.
+
+The sources below support additions to the existing design questions: how to organize work, retain experience, govern execution, and verify improvement. Reading scopes refer to the September 7 review, including the preceding research pass. We inspected primary documents and selected implementation paths; we did not reproduce the papers' experiments or test the hosted products.
+
+<a id="source-graph-engineering"></a>
+
+### S1. Graph Engineering: organizing tasks, agents, and state
+
+[Graph Engineering in the Era of LLM Agents](https://arxiv.org/abs/2608.21156v2), first submitted August 21; **v2, August 26**. Read the definitions and representative mechanisms in [§§2–5 and Appendix 11](https://arxiv.org/html/2608.21156v2), with emphasis on §4's task organization, agent coordination, and runtime state management. References were sampled, not individually verified.
+
+**Use in the catalog:** extend the existing orchestration and persistence discussion with these three connected views. The survey supplies a useful organizing framework; its “System Intelligence” terminology and proposed progression are the authors' position. It does not establish that graph-based coordination began in August or that it universally outperforms other designs.
+
+<a id="source-agent-graph"></a>
+
+### S2. Agent Graph: completion backed by facts
+
+[Agent Graph v0.3.0](https://github.com/context4ai/agent-graph/releases/tag/v0.3.0), **August 31**; source pinned to [`387f80d`](https://github.com/context4ai/agent-graph/tree/387f80db65bf20a61bc666b4fa885200fcedad08). Read the README, core [design sections](https://github.com/context4ai/agent-graph/blob/387f80db65bf20a61bc666b4fa885200fcedad08/docs/en/graph-engineering.md), and selected evaluator, router, and test code. For a nonterminal node with `satisfiedBy`, [the evaluator](https://github.com/context4ai/agent-graph/blob/387f80db65bf20a61bc666b4fa885200fcedad08/src/evaluator.ts#L137) returns `unverified` when completion is recorded but the required facts do not match.
+
+**Use in the catalog:** a concrete work-contract example under Agent Frameworks and Orchestration. The host still supplies execution and trustworthy facts. This is a static code reading, not a full audit or a passing test run. The core design document predates this release; August 31 specifically anchors the typed-resource update.
+
+<a id="source-codex-memory"></a>
+
+<a id="s3-codex-cross-session-memory-alongside-compaction"></a>
+
+### S3. Codex: working context and cross-session memory
+
+The [Memories documentation](https://learn.chatgpt.com/docs/customization/memories) is **undated, read September 7**. Read its local-storage, eligibility, and chat-control sections. It distinguishes local Codex memory from ChatGPT web and Work memory. Local memories are optional and off by default in this documented setup.
+
+Implementation claims are pinned to [`rust-v0.153.4`](https://github.com/openai/codex/releases/tag/rust-v0.153.4), **September 4**, commit `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`. Read the memory pipeline README; selected startup, extraction, consolidation, and read-extension code; and the relevant prompt templates. [Phase 2](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/memories/write/src/phase2.rs) consolidates extracted rollout memories under a global lock. The [read-path template](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/ext/memories/templates/memories/read_path.md) routes from a small summary to searchable memory and supporting records as needed. The [compaction implementation](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/compact.rs#L63) retains automatic and manual compaction; the [CLI command documentation](https://learn.chatgpt.com/docs/developer-commands?surface=cli) also retains `/compact`.
+
+**Use in the catalog:** distinguish working-context management from experience carried into later runs. Cross-session Memories is separate from the experimental working-context mechanism below. The consolidation template's provenance and deletion instructions describe intended model behavior, not a verified deletion guarantee. The [live configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) and [this release's constants](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/config/src/types.rs#L48) disagree on candidate age and count, so the catalog does not present an unversioned default. No client run or end-to-end memory-quality test was performed.
+
+<a id="source-codex-context-management"></a>
+
+#### Experimental working-context management
+
+The [0.153.0 release](https://github.com/openai/codex/releases/tag/rust-v0.153.0), **September 3**, adds `features.context_management.experimental_mode`. The [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), read September 7, describes notes and searchable history in place of repeatedly reducing context to one summary. The switch is off by default. This activation requires eligible ChatGPT Plus, Pro, or Pro Lite sessions on the Codex backend; API-key sessions, custom providers, and temporary structured threads are excluded.
+
+Read the [activation change](https://github.com/openai/codex/commit/cff76fa96f70f9f3b63d221446fd02cfd87e6d2e) and the fixed v0.153.4 [token-budget activation](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/token_budget.rs), [compaction branch](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/compact_token_budget.rs), [new-window handler](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/tools/handlers/new_context_window.rs), [history/notes tool definitions](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/ext/history-notes/src/tools.rs), and selected extension/backend code. The token-budget manual and automatic paths start a fresh window without model/server summarization, while retaining compact hooks and `ContextCompaction` events. Model guidance asks the agent to write checkpoints and retrieve prior items by window/item IDs. This changes the implementation behind a context transition; it does not remove every compaction interface.
+
+**Astra and version scope:** a [September 6 source change](https://github.com/openai/codex/commit/6af345407d9c2a568da9d01b6c4b81a9e61495c0) adds `supports_experimental_context` and sets it on bundled `gpt-6-astra`; that check is absent in v0.153.4. The [v0.153.4 catalog](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/models-manager/models.json) explicitly leaves Astra's token-budget/history-notes activation off and includes related guidance for earlier models. The activation commit's parent already contains token-budget machinery. These observations establish an experimental Codex protocol and later Astra support integration, not a first appearance of memory inside the model. The [Astra API guide](https://developers.openai.com/api/docs/guides/latest-model) separately retains compaction support.
+
+[Model metadata](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/token_budget.rs#L128) can also activate token budgeting independently of this experimental switch, and the [remote model catalog](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/models-manager/src/manager.rs#L412) can override bundled metadata. The bundled defaults therefore do not determine a particular account's effective activation.
+
+**Design implication and limits:** evaluate note completeness, retrieval of original evidence, and recovery after window resets alongside ordinary summarization and cross-session memory. This review read public code and documentation; it did not test the backend, retrieve an account's remote model catalog, or establish production rollout or performance. The September 6 revision is later source evidence, not behavior attributed to the 0.153.4 release.
+
+<a id="source-composable-layers"></a>
+
+### S4. Runtime, framework, and harness as composable layers
+
+[Deep Agents vs LangChain vs LangGraph](https://www.langchain.com/blog/deep-agents-vs-langchain-vs-langgraph), **August 6: an earlier source added for context**. Read the full article, especially its layer definitions and composition examples. Also read the [Graph API documentation](https://docs.langchain.com/oss/python/langgraph/graph-api)'s state, reducers, conditional edges, `Send`, `Command`, and migration sections; that page is undated.
+
+**Use in the guide:** refine the agent-loop versus graph comparison. A graph can contain model-directed loops and dynamically route work; its structure and the decisions made during execution are separate choices. The three-layer naming describes LangChain's stack, not a universal industry standard. LangGraph is already in the catalog, and these APIs are not established as new in this window. Examples were not executed.
+
+<a id="source-cursor-runtime"></a>
+
+### S5. Cursor: goals, event subscriptions, and workers
+
+Read the full **August 19** [cloud-agent and harness changelog](https://cursor.com/changelog/08-19-26) and **September 2** [self-hosted machines announcement](https://cursor.com/changelog/self-hosted-machines). The former describes cloud event subscriptions, `/goal`, subagents with separate project copies and VMs, and steering at the next tool call. The latter describes named worker queues and hibernation of idle machines.
+
+**Use in the catalog:** extend the existing cloud-agent material with separate lifecycles for a goal, a session, an event source, and execution capacity. These are vendor-documented mechanisms. The announcements do not specify event ordering, deduplication, or external side-effect guarantees; we did not test recovery or infer that all model data stays on the worker's network.
+
+<a id="source-temporal-runtime"></a>
+
+### S6. Temporal: replay and the boundaries of pause
+
+The **August 27** [Durable Digest](https://temporal.io/blog/durable-digest-august-2026) lists Deep Agents integration and Workflow Pause as **pre-release**. Read that release section and the current, undated [integration](https://docs.temporal.io/develop/python/integrations/deepagents) and [pause](https://docs.temporal.io/encyclopedia/workflow/workflow-pause) documentation, covering model/tool execution, I/O wrappers, retries, continuation, and in-flight work.
+
+**Use in the catalog:** make recovery responsibilities concrete. Model calls run as Activities; tools and backends with real I/O require the documented wrappers. `continue-as-new` carries messages and the result cache, with other state reconstructed. Pause stops new dispatch while already-running Activities and timers can continue; it does not recursively pause child workflows. These boundaries qualify the digest's broad summary. We did not run the SDK or validate crash recovery, and this entry makes no GA or exactly-once side-effect claim.
+
+<a id="source-copilot-governance"></a>
+
+### S7. Copilot: extension updates and context admission
+
+Read the full announcements for [marketplace `autoUpdate`](https://github.blog/changelog/2026-08-26-enterprise-managed-settings-now-support-autoupdate-for-plugin-marketplaces/) (**August 26**) and [content exclusions in the app and CLI](https://github.blog/changelog/2026-09-02-content-exclusions-generally-available-in-copilot-app-and-cli/) (**September 2**). Also read the relevant precedence, marketplace, permission, MCP, and sandbox sections of [managed settings](https://docs.github.com/en/enterprise-cloud@latest/copilot/reference/enterprise-administrators/enterprise-managed-settings), plus the full [content-exclusion documentation](https://docs.github.com/en/copilot/concepts/context/content-exclusion); both are undated.
+
+**Use in the catalog:** extend the existing Agent Plugins and permissions entries. Marketplace update policy, permission to execute, and admission of content into context have different scopes. The app/CLI exclusion announcement applies to Business and Enterprise. Documentation still excludes editor Edit/Agent modes and notes indirect semantic information, symlink, and remote-filesystem limitations. These sources do not establish universal OS-level access control or removal of previously retained memory. Client behavior was not tested.
+
+<a id="source-looparena"></a>
+
+### S8. LoopArena: evaluating the outer controller
+
+[LoopArena](https://arxiv.org/abs/2608.28281v1), **August 28, v1**. Read [§§2–5, §7, and the budget/protocol appendices](https://arxiv.org/html/2608.28281v1); checked the repository's protocol entry without running it. With the Worker fixed, the benchmark evaluates how the Controller uses evidence from a read-only Reporter to decide whether to advance, verify, or stop.
+
+**Use in the catalog:** place beside LoopsBench to separate controller quality from the whole coding system. Results cover one Worker configuration and 27 source tasks. The reported 64.4% cost reduction compares task slices with full-task evaluation; it is not savings caused by adding a Controller. Reporter summaries are not independently executed verification. Results are author-reported.
+
+<a id="source-harnesslens"></a>
+
+### S9. HarnessLens: directing verification toward a proposed change
+
+[Verify Smarter, Evolve Further](https://arxiv.org/abs/2608.27311v1), **August 27, v1**. Read [§§3–6, Limitations, and selected evaluation appendices](https://arxiv.org/html/2608.27311v1), plus the repository's independent test entry. HarnessLens checks that a change loaded, selects tasks that expose its intended behavior and possible regressions, and requires further confirmation before accepting it.
+
+**Use in the catalog:** an example of allocating verification effort during harness evolution. The study uses one model family, three harnesses, and four benchmarks. Its budget combines sessions and task trials without equalizing dollars, tokens, or latency; observed regression checks do not guarantee general regression freedom. It complements the existing debate about fair optimization budgets. We did not reproduce the experiment.
+
+<a id="source-production-evals"></a>
+
+### S10. From production traces to executable evaluation tasks
+
+Read both official articles in full: [How We Build Agent Environments & Tasks](https://www.langchain.com/blog/building-agent-environments-and-tasks) (**August 25**) and [LangSmith Tuned Evaluators](https://www.langchain.com/blog/introducing-langsmith-tuned-evaluators-starting-with-perceived-error) (**August 18**). The former develops human-reviewed Task Specs and shared World Specs before generating executable Harbor tasks. The latter uses a versioned judge to flag conversations for investigation.
+
+**Use in the catalog:** give the existing observability-to-improvement loop a concrete path from traces to reviewed specifications, runnable tasks, and regression checks. Perceived Error is explicitly a proxy for meeting user needs; it is not a final correctness verdict. The task-generation article supplies engineering experience rather than a controlled benchmark. We did not use the hosted evaluator or adopt its cost and accuracy claims as independently verified results.
+
+### Earlier sources and claims kept out of this update
+
+| Source | Reading scope and treatment |
+|:---|:---|
+| [TRIAGE / One Recipe, Many Harnesses](https://arxiv.org/abs/2608.10178v1), August 10 | Already added on August 16. Read §§3–4, Appendices A.4, B, C.1–C.2, H, and artifact examples. The useful refinement is the boundary between portable lessons and ecosystem-specific adaptation. Its total optimization budget is not matched against strong alternative optimizers; this is an existing entry reviewed more closely. |
+| [Deep Agents v0.7](https://www.langchain.com/blog/deep-agents-v0-7), July 29; [OpenAI harness engineering](https://openai.com/index/harness-engineering/), February 11 | Already catalogued. The September research reread the former's ablation and model comparison and the latter's repository, feedback, and maintenance discussion. They provide context, not new releases in the August–September window. |
+| [Deterministic Execution Constraints](https://arxiv.org/html/2608.26197v1), August 25 | Retained as a candidate. Read §§3–8 and Tables 1–3. The HTML abstract's perfect-reproducibility wording conflicts with Table 2; the study also uses two small synthetic tasks. No headline reliability claim is adopted. |
+| [HEART / Agent-Native Reusable Tool Primitives](https://arxiv.org/html/2609.01736v1), September 1 | Retained as a candidate. Read §§3–4 and Appendices E.3 and G. Token cost, API cost, and total multi-agent consumption are not interchangeable, and a table/prose result differs. No headline savings or general prompt-injection protection claim is adopted. |
+| [Claude Code v2.1.259](https://github.com/anthropics/claude-code/releases/tag/v2.1.259) and [v2.1.260](https://github.com/anthropics/claude-code/releases/tag/v2.1.260), September 2–3 | Read the relevant permission release notes. v2.1.260 reverts v2.1.259's broader Bash argument checks for `Read()` deny rules. The catalog must follow the resulting behavior rather than accumulate every announced change as still active. These are release claims, not reproduced vulnerability tests. |
+
+### Status of the historical log
+
+The sections below preserve the earlier sweeps and their decisions. “Candidate,” “missing,” star counts, and verification totals describe those snapshots; they are not a current coverage audit. Entries subsequently added to the bilingual README remain here as provenance.
+
+Two previously unresolved leads were incorporated in the [August 16 update](https://github.com/VILA-Lab/Dive-into-Claude-Code/commit/a82805c2cd2ed396303aec96f7f8f2124e97869c): the Codex Security CLI/SDK in Cross-Vendor Code-Agent Engineering, and Senior SWE-bench in Evaluation & Benchmarks. Their rows below now record that change in catalog status. The September review did not repeat the entire July source audit.
+
 
 ## Weekly addendum — 2026-07-31 to 2026-08-07
 
@@ -160,7 +283,7 @@ Three themes run through the rest:
 
 ## P2: verified, lower priority
 
-All entries below were verified and grep-clean against `README.md`, `README_zh.md`, and `docs/`. Kept for completeness so any can be promoted without re-research.
+The original sweep recorded URL/title checks and catalog deduplication for these candidates. Those checks belong to the July snapshot; reread the primary source before promoting an entry or relying on its numeric claims.
 
 | Date | Resource | Note | Target section |
 |:---:|:---|:---|:---|
@@ -195,9 +318,11 @@ All entries below were verified and grep-clean against `README.md`, `README_zh.m
 | 2026-07-29 | [A First Look at Coding Agents' Compliance with AI Contribution Rules in Open-Source Communities](https://arxiv.org/abs/2607.26819) | RepoComplianceBench, 106 issues from 49 repos: agents almost never proactively retrieve contribution rules and never refuse to contribute in AI-banned repos. | `### Evaluation & Benchmarks` |
 | 2026-07-24 | [Claim Plane: Enforceable Change Intents and Dynamic Scope for Parallel Coding Agents](https://arxiv.org/abs/2607.21909) | Pre-write admission for concurrent agents via versioned ChangeIntents. **Only a six-pair feasibility study — flag as preliminary if promoted.** | `### Related Academic Papers` |
 
-## Older than the window, but genuinely missing
+<a id="older-than-the-window-but-genuinely-missing"></a>
 
-These fall outside 2026-06-25 to 2026-07-30 but are absent from the catalogs, and the first two are arguably P0-grade for this repo.
+## Earlier sources flagged for backfill in the July sweep
+
+These fell outside 2026-06-25 to 2026-07-30 and were flagged as absent at the time. The first two were subsequently promoted in the August 7 addendum above.
 
 | Date | Resource | Why it matters | Target section |
 |:---:|:---|:---|:---|
@@ -209,15 +334,17 @@ These fall outside 2026-06-25 to 2026-07-30 but are absent from the catalogs, an
 | 2026-05-13 | [New in Deep Agents v0.6](https://www.langchain.com/blog/deep-agents-0-6) | ContextHubBackend makes agent-behavior files a versioned, diffable, reviewable, environment-tagged repo; Harness Profiles do per-model tuning; Delta Channels cut checkpoint overhead 10-100x. | `### Cross-Vendor Code-Agent Engineering` |
 | 2026-06-22 | [The Verification Stack](https://www.openhands.dev/blog/20260506-the-verification-stack) | Layered automated verifiers catching different classes of mistake at different stages. Three days outside the window. | `### Cross-Vendor Code-Agent Engineering` |
 
-## Verification status
+<a id="verification-status"></a>
 
-**What has been checked exhaustively:** every one of the 122 URLs resolves (only `openai.com` returns 403, and that is bot-blocking, not a dead link — its canonical URL, title and date were confirmed through a source quoting it directly). All 35 arXiv IDs were confirmed to exist through the arXiv API, with titles comparedword-for-word. All 84 non-arXiv entries had their page `<title>` compared against the title used here; the nine mismatches were each opened and resolved by hand. Every entry greps clean against `README.md`, `README_zh.md`, and all of `docs/`.
+## Verification record from the July sweep
 
-**What has been checked by sample, not exhaustively:** the numeric claims inside the description cells. Roughly twenty of the most specific and most load-bearing figures were re-read against the primary source. That pass corrected eleven errors, so the remaining unsampled figures should be treated as **not yet independently verified** — re-read the source before promoting a row into the README on the strength of a number in it.
+**Original scope report:** the July log recorded checks of 122 URLs, 35 arXiv IDs, and 84 non-arXiv page titles, with nine title mismatches reviewed separately. It also recorded catalog deduplication against the README files and `docs/`. These totals came from the earlier passes and were not reconciled or rerun in September. The `openai.com` incident article was inaccessible to the automated fetcher; its identity and date were corroborated indirectly, so that entry did not receive a primary-body check.
+
+**Numeric claims were sampled:** the earlier log reports rereading roughly twenty figures and correcting eleven errors. The remaining unsampled figures are **not yet independently verified**. Reread the source before promoting a row on the strength of a number in it.
 
 Residual caveats, stated rather than hidden:
 
-- **All 21 arXiv entries** were confirmed through the arXiv API with ID, exact title, date, and category. No CVSS scores, affiliations, or acceptance claims are asserted beyond what a comments field states verbatim.
+- A separate note in the original log records **21 arXiv entries** checked through the API for ID, title, date, and category. Its relationship to the 35-entry count above was not reconciled, so neither is used as a current audit total. Venue claims below come from the sources' comments fields.
 - **Two venue strings were read verbatim off the abs pages.** `2607.12338` reads `KDD 2026 Workshop Agentic AI Evaluation and Trustworthiness`; `2607.10569` reads `Accepted to the Agentic Software Engineering (SE 3.0) Workshop at KDD 2026 (non-archival)`. Both are workshop, one explicitly non-archival, so per this repo's convention **both keep `arXiv` as the Venue**. `2607.25398`'s WAB@COLM 2026 acceptance is quoted from its comments field.
 - **The OpenAI incident post 403s to automated fetchers on every path.** Its canonical URL, exact title, and 2026-07-21 date were confirmed via a source quoting it directly with the canonical URL, cross-checked against CNBC, Axios, and The Hacker News. The two quotes used are verbatim. Open it in a browser before committing.
 - **`The Making of Claude Code` has an unread body** and is marked P2 for that reason alone.
@@ -232,14 +359,18 @@ Residual caveats, stated rather than hidden:
 - **Out of window by a day or two:** `2606.21338` What Happens Locally, Leaks Globally (2026-06-19); Steve Yegge's "The Flat Curve Society" (2026-06-19).
 - **Checked, nothing on-topic in window:** Zed blog (last post 2026-06-23), JetBrains, Augment, Windsurf, Block goose, Continue, Daytona, Netlify, Fly.io, Modal, E2B, Apollo Research, UK AISI, LMArena, Scale AI, Epoch AI, Google DeepMind; Mitchell Hashimoto, Thorsten Ball, Kent Beck, Ethan Mollick, Peter Steinberger, Lance Martin, Hamel Husain, Nathan Lambert, Sebastian Raschka, Han Xiao, Omar Khattab, Nicholas Carlini, Kai Greshake, Sander Schulhoff.
 
-## Unverified leads — do not publish without confirming
+<a id="unverified-leads--do-not-publish-without-confirming"></a>
+
+## Leads unresolved at the July cutoff
+
+The two rows marked as later catalogued have since changed status. Other leads still require confirmation before promotion.
 
 | Lead | What is missing |
 |:---|:---|
 | Bloomberg Odd Lots — Boris Cherny interview, reportedly 2026-07-20 | Date appears in the URL and search results, but the page is paywalled and could not be fetched. |
-| OpenAI open-sources the Codex Security CLI and SDK (`github.com/openai/codex-security`) | License (Apache-2.0) and scope confirmed from the repo page, but no release or creation date was exposed and OpenAI's announcement channel 403s. Reported widely as a stealth drop with no formal post. Needs a date from git history. |
+| OpenAI open-sources the Codex Security CLI and SDK (`github.com/openai/codex-security`) | **Later catalogued on August 16** in Cross-Vendor Code-Agent Engineering. The July pass had confirmed the repository's license and scope but lacked a publication date. The later README update records first package publication on July 28; this row preserves the earlier gap rather than treating the source as still missing. |
 | Anthropic's response to China's CNVD "backdoor" advisory (2026-07-08) | CNVD flagged Claude Code v2.1.91-2.1.196 for transmitting location and identity signals; the only reply found is an X post from a staff member describing a March 2026 anti-abuse experiment removed in v2.1.198. No official Anthropic blog or advisory to cite. |
 | Dan Luu — "Agentic test processes, LLM benchmarks, and other notes on agentic coding" | Strong content (agents fabricating evidence, LLM-written tests being poor while LLM-directed fuzzing finds real bugs fast), but danluu.com carries no on-page publication date; the only anchor is a 2026-07-04 HN submission. |
 | ykdojo — "How to set up your spare Mac for Claude Code to fully control" | Hardware-isolation sandboxing guide. No on-page date; HN submission 2026-07-18. |
 | MiniMax on self-evolving harnesses | Describes a 100+ round analyze-trajectories → modify-scaffold → evaluate → keep-or-revert loop for a 30% internal gain, but the fetchable version is dated 2026-03-18, out of window; a newer M3-era post may exist and could not be confirmed. |
-| "Senior SWE-bench" | Surfaced repeatedly as a July 2026 coding-agent benchmark (100 tasks, 50 public / 50 held private, 12 production repos), but no primary site, paper, or publisher page could be located. |
+| Senior SWE-bench | **Later catalogued on August 16** in Evaluation & Benchmarks, with the [primary site](https://senior-swe-bench.snorkel.ai/) and its methodology link. The July pass had not located that source; it is no longer an unresolved catalog lead. |
